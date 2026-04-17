@@ -34,6 +34,12 @@ macros::x86_splitjoin!(
     _mm256_set_m128i,
     "avx2"
 );
+macros::x86_zipunzip_crosslane!(
+    f16x16,
+    _mm256_permutexvar_epi16,
+    _mm256_setr_epi16(0, 8, 1, 9, 2, 10, 3, 11, 4, 12, 5, 13, 6, 14, 7, 15),
+    _mm256_setr_epi16(0, 2, 4, 6, 8, 10, 12, 14, 1, 3, 5, 7, 9, 11, 13, 15)
+);
 
 impl X86Splat for f16x16 {
     #[inline(always)]
@@ -117,4 +123,5 @@ mod test_x86_f16 {
     }
 
     test_utils::ops::test_splitjoin!(f16x16 => f16x8, 0xa4d00a4d04293967, V4::new_checked_uncached());
+    test_utils::ops::test_zipunzip!(f16x16 => f16x8, 0x17c9e5a3f2804b6d, V4::new_checked_uncached());
 }

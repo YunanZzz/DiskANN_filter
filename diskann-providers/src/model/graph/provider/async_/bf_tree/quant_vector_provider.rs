@@ -74,10 +74,9 @@ impl QuantVectorProvider {
         self.quant_vector_index.config()
     }
 
-    /// Create a snapshot of the quant vector index
-    ///
-    pub fn snapshot(&self) -> std::path::PathBuf {
-        self.quant_vector_index.snapshot()
+    /// Access the underlying BfTree
+    pub(crate) fn bftree(&self) -> &BfTree {
+        &self.quant_vector_index
     }
 
     /// Create a new instance from an existing BfTree (for loading from snapshot)
@@ -131,9 +130,7 @@ impl QuantVectorProvider {
     }
 
     /// Create a distance computer for the underlying schema
-    pub fn distance_computer(
-        &self,
-    ) -> Result<DistanceComputer, pq::distance::dynamic::DistanceComputerConstructionError> {
+    pub fn distance_computer(&self) -> DistanceComputer {
         DistanceComputer::new(self.pq_chunk_table.clone(), self.metric)
     }
 
@@ -280,14 +277,9 @@ mod tests {
         let offsets = vec![0, dim];
         let full_pivot_data = vec![0.0; 256 * dim];
 
-        let pq_chunk_table = FixedChunkPQTable::new(
-            dim,
-            full_pivot_data.into(),
-            centroid.into(),
-            offsets.into(),
-            None,
-        )
-        .unwrap();
+        let pq_chunk_table =
+            FixedChunkPQTable::new(dim, full_pivot_data.into(), centroid.into(), offsets.into())
+                .unwrap();
 
         let bf_tree_config = Config::default();
         let provider =
@@ -319,7 +311,6 @@ mod tests {
             Box::new([0.0, 0.0, 1.0, 1.0, 2.0, 2.0]),
             Box::new([0.0, 0.0]),
             Box::new([0, dim]),
-            None,
         )
         .unwrap();
 
@@ -370,7 +361,7 @@ mod tests {
         );
 
         // Distance Computer.
-        let d = provider.distance_computer().unwrap();
+        let d = provider.distance_computer();
         assert_eq!(
             d.evaluate_similarity(
                 &provider.get_vector_sync(0).unwrap(),
@@ -394,14 +385,9 @@ mod tests {
         let centroid = vec![0.0; dim];
         let offsets = vec![0, dim];
         let full_pivot_data = vec![0.0; 256 * dim];
-        let pq_chunk_table = FixedChunkPQTable::new(
-            dim,
-            full_pivot_data.into(),
-            centroid.into(),
-            offsets.into(),
-            None,
-        )
-        .unwrap();
+        let pq_chunk_table =
+            FixedChunkPQTable::new(dim, full_pivot_data.into(), centroid.into(), offsets.into())
+                .unwrap();
 
         let bf_tree_config = Config::default();
         let provider = Arc::new(

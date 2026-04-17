@@ -6,10 +6,8 @@
 use std::io::{BufWriter, Write};
 
 use byteorder::{LittleEndian, WriteBytesExt};
-use diskann_providers::{
-    storage::StorageWriteProvider,
-    utils::{math_util, write_metadata},
-};
+use diskann_providers::storage::StorageWriteProvider;
+use diskann_utils::{io::Metadata, sampling::random::WithApproximateNorm};
 use diskann_vector::Half;
 
 use crate::utils::{CMDResult, CMDToolError, DataType};
@@ -58,7 +56,7 @@ Generate random points around a sphere with the specified radius and write them 
 When data_type is int8 or uint8 radius must be <= 127.0
 */
 #[allow(clippy::panic)]
-pub fn write_random_data_writer<T: Sized + Write>(
+fn write_random_data_writer<T: Sized + Write>(
     mut writer: BufWriter<T>,
     data_type: DataType,
     number_of_dimensions: usize,
@@ -75,7 +73,7 @@ pub fn write_random_data_writer<T: Sized + Write>(
         });
     }
 
-    write_metadata(&mut writer, number_of_vectors, number_of_dimensions)?;
+    Metadata::new(number_of_vectors, number_of_dimensions)?.write(&mut writer)?;
 
     let block_size = 131072;
     let nblks = u64::div_ceil(number_of_vectors, block_size);
@@ -173,13 +171,9 @@ fn write_random_vector_block<
 ) -> CMDResult<()> {
     let mut found_nonzero = false;
 
-    let vectors = math_util::generate_vectors_with_norm(
-        number_of_points as usize,
-        number_of_dimensions,
-        radius,
-        &mut diskann_providers::utils::create_rnd_from_seed(0),
-    )?;
-    for vector in vectors {
+    let mut rng = diskann_providers::utils::create_rnd_from_seed(0);
+    for _ in 0..number_of_points {
+        let vector = f32::with_approximate_norm(number_of_dimensions, radius, &mut rng);
         // Check for non-zero after casting to final numeric types.  Do not short-circuit
         // evaluate to ensure we always write the data.
         found_nonzero |= write_method(writer, &vector)?;

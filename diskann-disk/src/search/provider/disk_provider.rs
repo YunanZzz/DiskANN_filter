@@ -15,17 +15,21 @@ use std::{
     time::Instant,
 };
 
+use crate::data_model::GraphDataType;
 use diskann::{
     graph::{
         self,
-        glue::{self, ExpandBeam, IdIterator, SearchExt, SearchPostProcess, SearchStrategy},
+        glue::{
+            self, DefaultPostProcessor, ExpandBeam, IdIterator, SearchExt, SearchPostProcess,
+            SearchStrategy,
+        },
         search::Knn,
-        search_output_buffer, AdjacencyList, DiskANNIndex, SearchOutputBuffer,
+        search_output_buffer, AdjacencyList, DiskANNIndex,
     },
     neighbor::Neighbor,
     provider::{
         Accessor, BuildQueryComputer, DataProvider, DefaultContext, DelegateNeighbor, HasId,
-        NeighborAccessor,
+        NeighborAccessor, NoopGuard,
     },
     utils::{
         object_pool::{ObjectPool, PoolOption, TryAsPooled},
@@ -35,12 +39,11 @@ use diskann::{
 };
 use diskann_providers::storage::StorageReadProvider;
 use diskann_providers::{
-    model::{
-        compute_pq_distance, compute_pq_distance_for_pq_coordinates, graph::traits::GraphDataType,
-        pq::quantizer_preprocess, PQData, PQScratch,
-    },
+    model::{compute_pq_distance, compute_pq_distance_for_pq_coordinates},
     storage::{get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file, LoadWith},
 };
+
+use crate::search::pq::{quantizer_preprocess, PQData, PQScratch};
 use diskann_vector::{distance::Metric, DistanceFunction, PreprocessedDistanceFunction};
 use futures_util::future;
 use tokio::runtime::Runtime;
@@ -99,6 +102,8 @@ where
     type InternalId = u32;
 
     type ExternalId = u32;
+
+    type Guard = NoopGuard<u32>;
 
     type Error = ANNError;
 
@@ -279,7 +284,7 @@ impl<'a> RerankAndFilter<'a> {
 impl<Data, VP>
     SearchPostProcess<
         DiskAccessor<'_, Data, VP>,
-        [Data::VectorDataType],
+        &[Data::VectorDataType],
         (
             <DiskProvider<Data> as DataProvider>::InternalId,
             Data::AssociatedDataType,
@@ -300,7 +305,9 @@ where
     ) -> Result<usize, Self::Error>
     where
         I: Iterator<Item = Neighbor<u32>> + Send,
-        B: SearchOutputBuffer<(u32, Data::AssociatedDataType)> + Send + ?Sized,
+        B: search_output_buffer::SearchOutputBuffer<(u32, Data::AssociatedDataType)>
+            + Send
+            + ?Sized,
     {
         let provider = accessor.provider;
 
@@ -335,15 +342,8 @@ where
     }
 }
 
-impl<'this, Data, ProviderFactory>
-    SearchStrategy<
-        DiskProvider<Data>,
-        [Data::VectorDataType],
-        (
-            <DiskProvider<Data> as DataProvider>::InternalId,
-            Data::AssociatedDataType,
-        ),
-    > for DiskSearchStrategy<'this, Data, ProviderFactory>
+impl<'this, Data, ProviderFactory> SearchStrategy<DiskProvider<Data>, &[Data::VectorDataType]>
+    for DiskSearchStrategy<'this, Data, ProviderFactory>
 where
     Data: GraphDataType<VectorIdType = u32>,
     ProviderFactory: VertexProviderFactory<Data>,
@@ -351,7 +351,6 @@ where
     type QueryComputer = DiskQueryComputer;
     type SearchAccessor<'a> = DiskAccessor<'a, Data, ProviderFactory::VertexProviderType>;
     type SearchAccessorError = ANNError;
-    type PostProcessor = RerankAndFilter<'this>;
 
     fn search_accessor<'a>(
         &'a self,
@@ -366,8 +365,24 @@ where
             self.scratch_pool,
         )
     }
+}
 
-    fn post_processor(&self) -> Self::PostProcessor {
+impl<'this, Data, ProviderFactory>
+    DefaultPostProcessor<
+        DiskProvider<Data>,
+        &[Data::VectorDataType],
+        (
+            <DiskProvider<Data> as DataProvider>::InternalId,
+            Data::AssociatedDataType,
+        ),
+    > for DiskSearchStrategy<'this, Data, ProviderFactory>
+where
+    Data: GraphDataType<VectorIdType = u32>,
+    ProviderFactory: VertexProviderFactory<Data>,
+{
+    type Processor = RerankAndFilter<'this>;
+
+    fn default_post_processor(&self) -> Self::Processor {
         RerankAndFilter::new(self.vector_filter)
     }
 }
@@ -393,7 +408,7 @@ impl PreprocessedDistanceFunction<&[u8], f32> for DiskQueryComputer {
     }
 }
 
-impl<Data, VP> BuildQueryComputer<[Data::VectorDataType]> for DiskAccessor<'_, Data, VP>
+impl<Data, VP> BuildQueryComputer<&[Data::VectorDataType]> for DiskAccessor<'_, Data, VP>
 where
     Data: GraphDataType<VectorIdType = u32>,
     VP: VertexProvider<Data>,
@@ -430,7 +445,7 @@ where
     }
 }
 
-impl<Data, VP> ExpandBeam<[Data::VectorDataType]> for DiskAccessor<'_, Data, VP>
+impl<Data, VP> ExpandBeam<&[Data::VectorDataType]> for DiskAccessor<'_, Data, VP>
 where
     Data: GraphDataType<VectorIdType = u32>,
     VP: VertexProvider<Data>,
@@ -677,26 +692,20 @@ where
     type Id = u32;
 }
 
-impl<'a, Data, VP> Accessor for DiskAccessor<'a, Data, VP>
+impl<Data, VP> Accessor for DiskAccessor<'_, Data, VP>
 where
     Data: GraphDataType<VectorIdType = u32>,
     VP: VertexProvider<Data>,
 {
-    /// This references the PQ vector in the underlying `pq_data` store.
-    type Extended = &'a [u8];
-
     /// This accessor returns raw slices. There *is* a chance of racing when the fast
     /// providers are used. We just have to live with it.
-    ///
-    /// Since the underlying PQ store is shared, we ignore the `'b` lifetime here and
-    /// instead use `'a`.
-    type Element<'b>
+    type Element<'a>
         = &'a [u8]
     where
-        Self: 'b;
+        Self: 'a;
 
     /// `ElementRef` can have arbitrary lifetimes.
-    type ElementRef<'b> = &'b [u8];
+    type ElementRef<'a> = &'a [u8];
 
     /// Choose to panic on an out-of-bounds access rather than propagate an error.
     type GetError = ANNError;
@@ -1043,6 +1052,7 @@ fn ensure_vertex_loaded<Data: GraphDataType, V: VertexProvider<Data>>(
 
 #[cfg(test)]
 mod disk_provider_tests {
+    use crate::test_utils::{GraphDataF32VectorU32Data, GraphDataF32VectorUnitData};
     use diskann::{
         graph::{
             search::{record::VisitedSearchRecord, Knn},
@@ -1056,14 +1066,9 @@ mod disk_provider_tests {
     };
     use diskann_providers::{
         common::AlignedBoxWithSlice,
-        test_utils::graph_data_type_utils::{
-            GraphDataF32VectorU32Data, GraphDataF32VectorUnitData,
-        },
-        utils::{
-            create_thread_pool, file_util, load_aligned_bin, PQPathNames, ParallelIteratorInPool,
-        },
+        utils::{create_thread_pool, load_aligned_bin, PQPathNames, ParallelIteratorInPool},
     };
-    use diskann_utils::test_data_root;
+    use diskann_utils::{io::read_bin, test_data_root};
     use diskann_vector::distance::Metric;
     use rayon::prelude::{IndexedParallelIterator, IntoParallelRefIterator};
     use rstest::rstest;
@@ -1189,10 +1194,10 @@ mod disk_provider_tests {
     ) -> Vec<u32> {
         const ASSOCIATED_DATA_FILE: &str = "/sift/siftsmall_learn_256pts_u32_associated_data.fbin";
 
-        let (data, _npts, _dim) =
-            file_util::load_bin::<u32, StorageReader>(storage_provider, ASSOCIATED_DATA_FILE, 0)
+        let data =
+            read_bin::<u32>(&mut storage_provider.open_reader(ASSOCIATED_DATA_FILE).unwrap())
                 .unwrap();
-        data
+        data.into_inner().into_vec()
     }
 
     #[test]
@@ -1339,10 +1344,9 @@ mod disk_provider_tests {
         storage_provider: &StorageReader,
         query_result_path: &str,
     ) -> Vec<u32> {
-        let (result, _, _) =
-            file_util::load_bin::<u32, StorageReader>(storage_provider, query_result_path, 0)
-                .unwrap();
-        result
+        let result =
+            read_bin::<u32>(&mut storage_provider.open_reader(query_result_path).unwrap()).unwrap();
+        result.into_inner().into_vec()
     }
 
     struct TestDiskSearchParams<'a, StorageType> {
