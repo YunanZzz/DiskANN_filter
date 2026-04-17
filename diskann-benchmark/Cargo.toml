@@ -11,6 +11,7 @@ edition.workspace = true
 anyhow.workspace = true
 bf-tree.workspace = true
 bit-set.workspace = true
+bincode.workspace = true
 bytemuck.workspace = true
 roaring.workspace = true
 clap = { workspace = true, features = ["derive"] }
