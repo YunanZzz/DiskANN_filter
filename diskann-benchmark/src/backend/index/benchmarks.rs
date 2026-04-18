@@ -386,6 +386,46 @@ where
                     search_phase.bitmap.as_deref(),
                 )?;
 
+            let multihop = benchmark_core::search::graph::MultiHopDev::new(
+                index,
+                queries,
+                benchmark_core::search::graph::Strategy::broadcast(search_strategy),
+                bit_maps
+                    .into_iter()
+                    .map(utils::filters::as_query_label_provider)
+                    .collect(),
+            )?;
+
+            let search_results = search::knn::run(&multihop, &groundtruth, steps)?;
+            result.append(AggregatedSearchResults::Topk(search_results));
+            Ok(result)
+        }
+        SearchPhase::TopkMultihopFilterDev(search_phase) => {
+            // Keep a dedicated dev path so the implementation can diverge later.
+            let mut result = BuildResult::new_topk(build_stats);
+
+            checkpoint.checkpoint(&result)?;
+
+            let queries: Arc<Matrix<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
+                &search_phase.queries,
+            ))?);
+
+            let groundtruth =
+                datafiles::load_range_groundtruth(datafiles::BinFile(&search_phase.groundtruth))?;
+
+            let steps = search::knn::SearchSteps::new(
+                search_phase.reps,
+                &search_phase.num_threads,
+                &search_phase.runs,
+            );
+
+            let bit_maps =
+                generate_bitmaps(
+                    &search_phase.query_predicates,
+                    &search_phase.data_labels,
+                    search_phase.bitmap.as_deref(),
+                )?;
+
             let multihop = benchmark_core::search::graph::MultiHop::new(
                 index,
                 queries,

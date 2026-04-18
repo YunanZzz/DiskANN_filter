@@ -44,6 +44,7 @@ use crate::{
 
 mod knn_search;
 mod multihop_search;
+mod multihop_search_dev;
 mod range_search;
 
 pub mod record;
@@ -109,6 +110,7 @@ where
 
 pub use knn_search::{Knn, KnnSearchError, RecordedKnn};
 pub use multihop_search::MultihopSearch;
+pub use multihop_search_dev::MultihopSearchDev;
 pub use range_search::{Range, RangeSearchError};
 
 // Feature-gated diverse search.

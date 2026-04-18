@@ -5,12 +5,14 @@
 
 pub mod knn;
 pub mod multihop;
+pub mod multihop_dev;
 pub mod range;
 
 pub mod strategy;
 
 pub use knn::KNN;
 pub use multihop::MultiHop;
+pub use multihop_dev::MultiHopDev;
 pub use range::Range;
 
 pub use strategy::Strategy;
