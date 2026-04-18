@@ -10,7 +10,7 @@ use std::{
     fmt::Debug,
     fs::File,
     io::{BufReader, BufWriter},
-    path::{Path, PathBuf},
+    path::Path,
 };
 
 use diskann::{graph::index::QueryLabelProvider, utils::VectorId};
@@ -103,65 +103,49 @@ impl From<SerializableBitSet> for BitSet {
     }
 }
 
-fn bitmap_cache_path(query_predicates: &InputFile, data_labels: &InputFile) -> PathBuf {
-    let query_path = Path::new(query_predicates.to_str().unwrap());
-    let query_name = query_path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("queries");
-    let base_name = Path::new(data_labels.to_str().unwrap())
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("base");
-    let cache_name = format!("{query_name}.{base_name}.bitmap_cache.bin");
-    query_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join(cache_name)
-}
-
-
 pub(crate) fn generate_bitmaps(
     query_predicates: &InputFile,
     data_labels: &InputFile,
+    bitmap_path: Option<&str>,
 ) -> anyhow::Result<Vec<BitSet>> {
-    // let bit_maps = match read_labels_and_compute_bitmap(
-    let cache_path = bitmap_cache_path(query_predicates, data_labels);
-    println!(
-        "Bitmap cache check: query_labels={}, base_labels={}, cache={}",
-        query_predicates.display(),
-        data_labels.display(),
-        cache_path.display()
-    );
+    if let Some(bitmap_path) = bitmap_path {
+        let bitmap_path = Path::new(bitmap_path);
+        println!(
+            "Bitmap cache check: query_labels={}, base_labels={}, cache={}",
+            query_predicates.display(),
+            data_labels.display(),
+            bitmap_path.display()
+        );
 
-    if cache_path.is_file() {
-        let reader = BufReader::new(File::open(&cache_path)?);
-        let serialized: Vec<SerializableBitSet> = bincode::deserialize_from(reader)?;
-        let loaded: Vec<BitSet> = serialized.into_iter().map(Into::into).collect();
-        println!("Loaded bitmap cache from {}", cache_path.display());
-        return Ok(loaded);
+        if bitmap_path.is_file() {
+            let reader = BufReader::new(File::open(bitmap_path)?);
+            let serialized: Vec<SerializableBitSet> = bincode::deserialize_from(reader)?;
+            let loaded: Vec<BitSet> = serialized.into_iter().map(Into::into).collect();
+            println!("Loaded bitmap cache from {}", bitmap_path.display());
+            return Ok(loaded);
+        }
     }
 
     let bit_maps = read_labels_and_compute_bitmap(
         data_labels.to_str().unwrap(),
         query_predicates.to_str().unwrap(),
-    // ) {
-    //     Ok(bit_maps) => bit_maps,
-    //     Err(e) => {
-    //         return Err(e.into());
-    //     }
-    // };
-        )?;
+    )?;
 
-    let writer = BufWriter::new(File::create(&cache_path)?);
-    let serialized: Vec<SerializableBitSet> =
-        bit_maps.iter().map(SerializableBitSet::from).collect();
-    bincode::serialize_into(writer, &serialized)?;
+    if let Some(bitmap_path) = bitmap_path {
+        let bitmap_path = Path::new(bitmap_path);
+        let writer = BufWriter::new(File::create(bitmap_path)?);
+        let serialized: Vec<SerializableBitSet> =
+            bit_maps.iter().map(SerializableBitSet::from).collect();
+        bincode::serialize_into(writer, &serialized)?;
 
-    println!(
-        "Generated bitmaps from query/base labels and wrote cache to {}",
-        cache_path.display()
-    );
+        println!(
+            "Generated bitmaps from query/base labels and wrote cache to {}",
+            bitmap_path.display()
+        );
+    } else {
+        println!("Generated bitmaps from query/base labels without writing a cache file");
+    }
+
     Ok(bit_maps)
 }
 

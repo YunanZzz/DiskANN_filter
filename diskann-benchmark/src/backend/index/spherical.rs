@@ -377,6 +377,7 @@ mod imp {
                             let bit_maps = generate_bitmaps(
                                 &search_phase.query_predicates,
                                 &search_phase.data_labels,
+                                search_phase.bitmap.as_deref(),
                             )?;
 
                             let label_providers: Vec<_> = bit_maps
@@ -433,6 +434,7 @@ mod imp {
                             let bit_maps = generate_bitmaps(
                                 &search_phase.query_predicates,
                                 &search_phase.data_labels,
+                                search_phase.bitmap.as_deref(),
                             )?;
 
                             let bit_map_filters: Arc<[_]> = bit_maps

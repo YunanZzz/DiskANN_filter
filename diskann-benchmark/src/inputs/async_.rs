@@ -5,6 +5,7 @@
 
 use std::num::NonZero;
 use std::num::{NonZeroU32, NonZeroUsize};
+use std::path::Path;
 
 use anyhow::{anyhow, Context};
 use diskann::{
@@ -203,9 +204,75 @@ pub(crate) struct BetaSearchPhase {
     pub(crate) reps: NonZeroUsize,
     pub(crate) beta: f32,
     pub(crate) data_labels: InputFile,
+    pub(crate) bitmap: Option<String>,
     // Enable sweeping threads
     pub(crate) num_threads: Vec<NonZeroUsize>,
     pub(crate) runs: Vec<GraphSearch>,
+}
+
+fn resolve_bitmap_path(
+    bitmap: &mut Option<String>,
+    checker: &Checker,
+) -> Result<(), anyhow::Error> {
+    let Some(bitmap_path) = bitmap.as_mut() else {
+        return Ok(());
+    };
+
+    let path = Path::new(bitmap_path);
+
+    if path.is_absolute() {
+        if path.is_file() {
+            *bitmap_path = path.to_string_lossy().to_string();
+            return Ok(());
+        }
+
+        let parent = path.parent().ok_or_else(|| {
+            anyhow::anyhow!("bitmap path \"{}\" does not have a parent directory", path.display())
+        })?;
+        if !parent.is_dir() {
+            anyhow::bail!(
+                "parent directory \"{}\" of bitmap path \"{}\" does not exist",
+                parent.display(),
+                path.display()
+            );
+        }
+
+        *bitmap_path = path.to_string_lossy().to_string();
+        return Ok(());
+    }
+
+    if let Ok(resolved) = checker.check_path(path) {
+        *bitmap_path = resolved.to_string_lossy().to_string();
+        return Ok(());
+    }
+
+    let resolved = if let Some(output_dir) = checker.output_directory() {
+        output_dir.join(path)
+    } else if let Some(search_dir) = checker.search_directories().first() {
+        search_dir.join(path)
+    } else {
+        anyhow::bail!(
+            "relative bitmap path \"{}\" could not be resolved because no search or output directory is available",
+            path.display()
+        );
+    };
+
+    let parent = resolved.parent().ok_or_else(|| {
+        anyhow::anyhow!(
+            "resolved bitmap path \"{}\" does not have a parent directory",
+            resolved.display()
+        )
+    })?;
+    if !parent.is_dir() {
+        anyhow::bail!(
+            "parent directory \"{}\" of bitmap path \"{}\" does not exist",
+            parent.display(),
+            resolved.display()
+        );
+    }
+
+    *bitmap_path = resolved.to_string_lossy().to_string();
+    Ok(())
 }
 
 impl CheckDeserialization for BetaSearchPhase {
@@ -215,6 +282,7 @@ impl CheckDeserialization for BetaSearchPhase {
 
         self.query_predicates.check_deserialization(checker)?;
         self.data_labels.check_deserialization(checker)?;
+        resolve_bitmap_path(&mut self.bitmap, checker)?;
 
         if self.beta <= 0.0 || self.beta > 1.0 {
             return Err(anyhow::anyhow!(
@@ -240,6 +308,7 @@ pub(crate) struct MultiHopSearchPhase {
     pub(crate) groundtruth: InputFile,
     pub(crate) reps: NonZeroUsize,
     pub(crate) data_labels: InputFile,
+    pub(crate) bitmap: Option<String>,
     // Enable sweeping threads
     pub(crate) num_threads: Vec<NonZeroUsize>,
     pub(crate) runs: Vec<GraphSearch>,
@@ -252,6 +321,7 @@ impl CheckDeserialization for MultiHopSearchPhase {
 
         self.query_predicates.check_deserialization(checker)?;
         self.data_labels.check_deserialization(checker)?;
+        resolve_bitmap_path(&mut self.bitmap, checker)?;
 
         self.groundtruth.check_deserialization(checker)?;
         for (i, run) in self.runs.iter_mut().enumerate() {

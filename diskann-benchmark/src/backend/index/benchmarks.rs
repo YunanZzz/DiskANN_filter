@@ -329,7 +329,11 @@ where
                 datafiles::load_range_groundtruth(datafiles::BinFile(&search_phase.groundtruth))?;
 
             let bit_maps =
-                generate_bitmaps(&search_phase.query_predicates, &search_phase.data_labels)?;
+                generate_bitmaps(
+                    &search_phase.query_predicates,
+                    &search_phase.data_labels,
+                    search_phase.bitmap.as_deref(),
+                )?;
 
             let search_strategies = setup_filter_strategies(
                 search_phase.beta,
@@ -376,7 +380,11 @@ where
             );
 
             let bit_maps =
-                generate_bitmaps(&search_phase.query_predicates, &search_phase.data_labels)?;
+                generate_bitmaps(
+                    &search_phase.query_predicates,
+                    &search_phase.data_labels,
+                    search_phase.bitmap.as_deref(),
+                )?;
 
             let multihop = benchmark_core::search::graph::MultiHop::new(
                 index,
