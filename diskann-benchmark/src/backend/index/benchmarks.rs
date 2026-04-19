@@ -40,7 +40,7 @@ use super::{
 };
 use crate::{
     backend::index::{
-        result::{AggregatedSearchResults, BuildResult},
+        result::{AggregatedSearchResults, BuildResult, write_query_traces_jsonl},
         streaming::{self, managed, stats::StreamStats, FullPrecisionStream, Managed},
     },
     inputs::async_::{DynamicIndexRun, IndexBuild, IndexOperation, IndexSource, SearchPhase},
@@ -426,7 +426,7 @@ where
                     search_phase.bitmap.as_deref(),
                 )?;
 
-            let multihop = benchmark_core::search::graph::MultiHop::new(
+            let multihop = benchmark_core::search::graph::MultiHopDev::new(
                 index,
                 queries,
                 benchmark_core::search::graph::Strategy::broadcast(search_strategy),
@@ -437,6 +437,7 @@ where
             )?;
 
             let search_results = search::knn::run(&multihop, &groundtruth, steps)?;
+            let _ = write_query_traces_jsonl(&search_results, &search_phase.queries, None)?;
             result.append(AggregatedSearchResults::Topk(search_results));
             Ok(result)
         }

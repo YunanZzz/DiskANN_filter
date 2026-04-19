@@ -110,7 +110,9 @@ where
 
 pub use knn_search::{Knn, KnnSearchError, RecordedKnn};
 pub use multihop_search::MultihopSearch;
-pub use multihop_search_dev::MultihopSearchDev;
+pub use multihop_search_dev::{
+    HopTrace, MultihopSearchDev, MultihopSearchDevOutput, QueryTrace,
+};
 pub use range_search::{Range, RangeSearchError};
 
 // Feature-gated diverse search.

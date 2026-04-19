@@ -132,11 +132,11 @@ where
 
 impl<DP, T, S> Knn<DP::InternalId> for Arc<core_search::graph::MultiHopDev<DP, T, S>>
 where
-    DP: diskann::provider::DataProvider,
+    DP: diskann::provider::DataProvider<InternalId = u32>,
     core_search::graph::MultiHopDev<DP, T, S>: core_search::Search<
         Id = DP::InternalId,
         Parameters = diskann::graph::search::Knn,
-        Output = core_search::graph::knn::Metrics,
+        Output = core_search::graph::multihop_dev::Metrics<DP::InternalId>,
     >,
 {
     fn search_all(
@@ -149,9 +149,12 @@ where
         let results = core_search::search_all(
             self.clone(),
             parameters.into_iter(),
-            core_search::graph::knn::Aggregator::new(groundtruth, recall_k, recall_n),
+            core_search::graph::multihop_dev::Aggregator::new(groundtruth, recall_k, recall_n),
         )?;
 
-        Ok(results.into_iter().map(SearchResults::new).collect())
+        Ok(results
+            .into_iter()
+            .map(SearchResults::new_multihop_dev)
+            .collect())
     }
 }

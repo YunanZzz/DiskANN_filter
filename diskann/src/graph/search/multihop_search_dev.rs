@@ -33,6 +33,24 @@ use crate::{
     utils::VectorId,
 };
 
+#[derive(Debug, Clone)]
+pub struct HopTrace<I> {
+    pub hop_index: u32,
+    pub one_hop_enqueued: Vec<I>,
+    pub two_hop_enqueued: Vec<I>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct QueryTrace<I> {
+    pub hops: Vec<HopTrace<I>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MultihopSearchDevOutput<I> {
+    pub stats: SearchStats,
+    pub trace: QueryTrace<I>,
+}
+
 /// Parameters for development-only label-filtered search using multi-hop expansion.
 #[derive(Debug)]
 pub struct MultihopSearchDev<'q, InternalId> {
@@ -58,7 +76,7 @@ where
     S: SearchStrategy<DP, T>,
     T: Copy + Send + Sync,
 {
-    type Output = SearchStats;
+    type Output = MultihopSearchDevOutput<DP::InternalId>;
 
     fn search<O, PP, OB>(
         self,
@@ -84,7 +102,7 @@ where
 
             let mut scratch = index.search_scratch(self.inner.l_value().get(), start_ids.len());
 
-            let stats = multihop_search_internal_dev(
+            let (stats, trace) = multihop_search_internal_dev(
                 index.max_degree_with_slack(),
                 &self.inner,
                 &mut accessor,
@@ -106,7 +124,10 @@ where
                 .await
                 .into_ann_result()?;
 
-            Ok(stats.finish(result_count as u32))
+            Ok(MultihopSearchDevOutput {
+                stats: stats.finish(result_count as u32),
+                trace,
+            })
         }
     }
 }
@@ -168,13 +189,15 @@ pub(crate) async fn multihop_search_internal_dev<I, A, T, SR>(
     scratch: &mut SearchScratch<I>,
     search_record: &mut SR,
     query_label_evaluator: &dyn QueryLabelProvider<I>,
-) -> ANNResult<InternalSearchStats>
+) -> ANNResult<(InternalSearchStats, QueryTrace<I>)>
 where
     I: VectorId,
     A: ExpandBeam<T, Id = I> + SearchExt,
     SR: SearchRecord<I> + ?Sized,
 {
     let beam_width = search_params.beam_width().get();
+    let mut trace = QueryTrace::default();
+    let mut hop_index = 0;
 
     let make_stats = |scratch: &SearchScratch<I>| InternalSearchStats {
         cmps: scratch.cmps,
@@ -201,6 +224,8 @@ where
     let mut candidates_two_hop_expansion = Vec::with_capacity(max_degree_with_slack);
 
     while scratch.best.has_notvisited_node() && !accessor.terminate_early() {
+        let mut one_hop_enqueued = Vec::new();
+        let mut two_hop_enqueued = Vec::new();
         scratch.beam_nodes.clear();
         one_hop_neighbors.clear();
         candidates_two_hop_expansion.clear();
@@ -226,6 +251,9 @@ where
             match query_label_evaluator.on_visit(neighbor) {
                 QueryVisitDecision::Accept(accepted) => {
                     scratch.best.insert(accepted);
+                    if queue_contains_id(&scratch.best, accepted.id) {
+                        one_hop_enqueued.push(accepted.id);
+                    }
                 }
                 QueryVisitDecision::Reject => {
                     candidates_two_hop_expansion.push(neighbor);
@@ -233,7 +261,7 @@ where
                 QueryVisitDecision::Terminate => {
                     scratch.cmps += one_hop_neighbors.len() as u32;
                     scratch.hops += scratch.beam_nodes.len() as u32;
-                    return Ok(make_stats(scratch));
+                    return Ok((make_stats(scratch), trace));
                 }
             }
         }
@@ -263,13 +291,29 @@ where
             )
             .await?;
 
-        two_hop_neighbors
-            .iter()
-            .for_each(|neighbor| scratch.best.insert(*neighbor));
+        for neighbor in two_hop_neighbors.iter().copied() {
+            scratch.best.insert(neighbor);
+            if queue_contains_id(&scratch.best, neighbor.id) {
+                two_hop_enqueued.push(neighbor.id);
+            }
+        }
 
         scratch.cmps += two_hop_neighbors.len() as u32;
         scratch.hops += two_hop_expansion_candidate_ids.len() as u32;
+        trace.hops.push(HopTrace {
+            hop_index,
+            one_hop_enqueued,
+            two_hop_enqueued,
+        });
+        hop_index += 1;
     }
 
-    Ok(make_stats(scratch))
+    Ok((make_stats(scratch), trace))
+}
+
+fn queue_contains_id<I>(queue: &crate::neighbor::NeighborPriorityQueue<I>, id: I) -> bool
+where
+    I: VectorId,
+{
+    (0..queue.size()).any(|idx| queue.get(idx).id == id)
 }

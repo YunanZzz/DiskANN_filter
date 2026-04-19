@@ -54,7 +54,7 @@ mod imp {
         backend::index::{
             benchmarks::BuildAndSearch,
             build::{self, only_single_insert, BuildStats},
-            result::AggregatedSearchResults,
+            result::{AggregatedSearchResults, write_query_traces_jsonl},
             search,
         },
         inputs::{
@@ -493,7 +493,7 @@ mod imp {
                                 .collect();
 
                             for &layout in self.input.query_layouts.iter() {
-                                let multihop = benchmark_core::search::graph::MultiHop::new(
+                                let multihop = benchmark_core::search::graph::MultiHopDev::new(
                                     index.clone(),
                                     queries.clone(),
                                     benchmark_core::search::graph::Strategy::broadcast(
@@ -504,6 +504,12 @@ mod imp {
 
                                 let search_results =
                                     search::knn::run(&multihop, &groundtruth, steps)?;
+                                let layout_name = layout.to_string();
+                                let _ = write_query_traces_jsonl(
+                                    &search_results,
+                                    &search_phase.queries,
+                                    Some(&layout_name),
+                                )?;
                                 result.append(SearchRun {
                                     layout,
                                     results: AggregatedSearchResults::Topk(search_results),
