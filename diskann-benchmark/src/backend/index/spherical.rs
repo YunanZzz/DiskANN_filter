@@ -443,7 +443,7 @@ mod imp {
                                 .collect();
 
                             for &layout in self.input.query_layouts.iter() {
-                                let multihop = benchmark_core::search::graph::MultiHopDev::new(
+                                let multihop = benchmark_core::search::graph::MultiHop::new(
                                     index.clone(),
                                     queries.clone(),
                                     benchmark_core::search::graph::Strategy::broadcast(
@@ -493,7 +493,7 @@ mod imp {
                                 .collect();
 
                             for &layout in self.input.query_layouts.iter() {
-                                let multihop = benchmark_core::search::graph::MultiHop::new(
+                                let multihop = benchmark_core::search::graph::MultiHopDev::new(
                                     index.clone(),
                                     queries.clone(),
                                     benchmark_core::search::graph::Strategy::broadcast(

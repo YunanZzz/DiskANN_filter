@@ -247,12 +247,6 @@ where
         scratch.cmps += one_hop_neighbors.len() as u32;
         scratch.hops += scratch.beam_nodes.len() as u32;
 
-        // if hop_match_count * 4 >= one_hop_neighbors.len() {
-        //     has_entered_effective_region = true;
-        //     consecutive_hops_without_match = 0;
-        //     continue;
-        // }
-
         candidates_two_hop_expansion.sort_unstable_by(|a, b| {
             a.distance
                 .partial_cmp(&b.distance)
