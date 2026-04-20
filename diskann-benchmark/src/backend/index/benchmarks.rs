@@ -386,7 +386,7 @@ where
                     search_phase.bitmap.as_deref(),
                 )?;
 
-            let multihop = benchmark_core::search::graph::MultiHopDev::new(
+            let multihop = benchmark_core::search::graph::MultiHop::new(
                 index,
                 queries,
                 benchmark_core::search::graph::Strategy::broadcast(search_strategy),

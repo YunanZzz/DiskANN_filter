@@ -261,6 +261,11 @@ where
                 QueryVisitDecision::Terminate => {
                     scratch.cmps += one_hop_neighbors.len() as u32;
                     scratch.hops += scratch.beam_nodes.len() as u32;
+                    trace.hops.push(HopTrace {
+                        hop_index,
+                        one_hop_enqueued,
+                        two_hop_enqueued,
+                    });
                     return Ok((make_stats(scratch), trace));
                 }
             }
