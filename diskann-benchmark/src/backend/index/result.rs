@@ -258,7 +258,7 @@ pub(super) fn write_query_traces_jsonl(
 
     create_dir_all(TRACE_OUTPUT_DIR)?;
 
-    let file_name = trace_file_name(query_path, context);
+    let file_name = trace_file_name(query_path, context, results);
     let output_path = Path::new(TRACE_OUTPUT_DIR).join(file_name);
     let file = File::create(&output_path)?;
     let mut writer = BufWriter::new(file);
@@ -291,18 +291,41 @@ pub(super) fn write_query_traces_jsonl(
     Ok(Some(output_path))
 }
 
-fn trace_file_name(query_path: &Path, context: Option<&str>) -> String {
+fn trace_file_name(query_path: &Path, context: Option<&str>, results: &[SearchResults]) -> String {
     let base = query_path
         .file_stem()
         .and_then(|name| name.to_str())
         .or_else(|| query_path.file_name().and_then(|name| name.to_str()))
         .unwrap_or("query");
+    let l_suffix = search_l_suffix(results);
 
     match context {
         Some(context) if !context.is_empty() => {
-            format!("{base}__{}.trace.jsonl", sanitize_file_component(context))
+            format!(
+                "{base}_{}_{}.trace.jsonl",
+                l_suffix,
+                sanitize_file_component(context)
+            )
         }
-        _ => format!("{base}.trace.jsonl"),
+        _ => format!("{base}_{}.trace.jsonl", l_suffix),
+    }
+}
+
+fn search_l_suffix(results: &[SearchResults]) -> String {
+    let mut values: Vec<usize> = results.iter().map(|result| result.search_l).collect();
+    values.sort_unstable();
+    values.dedup();
+
+    match values.as_slice() {
+        [] => "lunknown".to_string(),
+        [single] => format!("l{single}"),
+        many => format!(
+            "ls{}",
+            many.iter()
+                .map(|value| value.to_string())
+                .collect::<Vec<_>>()
+                .join("-")
+        ),
     }
 }
 

@@ -19,6 +19,7 @@
             "beta": 0.5,
             "query_predicates": "new_query/caselaw_query_single_vector_filters_100_sel_0.005_0.01.jsonl",
             "data_labels": "caselaw_base_single_vector_metadata.jsonl",
+            "bitmap": "/scratch1/zhan4404/dataset/caselaw/new_query/caselaw_query_single_vector_filters_100_sel_0.005_0.01.jsonl.caselaw_base_single_vector_metadata.jsonl.bitmap_cache.bin",
           "reps": 3,
           "num_threads": [
             16
