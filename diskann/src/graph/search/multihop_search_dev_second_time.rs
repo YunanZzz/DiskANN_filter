@@ -175,9 +175,8 @@ where
     SR: SearchRecord<I> + ?Sized,
 {
     let beam_width = search_params.beam_width().get();
-    let max_consecutive_hops_without_match = 2usize;
     let mut has_entered_effective_region = false;
-    let mut consecutive_hops_without_match = 0usize;
+    let mut total_hops_without_match = 0usize;
 
     let make_stats = |scratch: &SearchScratch<I>| InternalSearchStats {
         cmps: scratch.cmps,
@@ -285,10 +284,9 @@ where
 
         if hop_match_count > 0 {
             has_entered_effective_region = true;
-            consecutive_hops_without_match = 0;
         } else if has_entered_effective_region {
-            consecutive_hops_without_match += 1;
-            if consecutive_hops_without_match >= max_consecutive_hops_without_match
+            total_hops_without_match += 1;
+            if total_hops_without_match >= 2
                 && scratch.best.size() > search_params.k_value().get()
             {
                 break;

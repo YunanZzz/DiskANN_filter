@@ -30,8 +30,20 @@ use crate::{
     },
     neighbor::Neighbor,
     provider::{BuildQueryComputer, DataProvider},
-    utils::VectorId,
+    utils::{TryIntoVectorId, VectorId},
 };
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy)]
+enum ExtraMatchStartPointMode {
+    Forward,
+    Reverse,
+}
+
+// Development-only knobs for seeding extra matching start points into the initial queue.
+// Set `EXTRA_MATCH_START_POINTS` to zero to disable the extra scan entirely.
+const EXTRA_MATCH_START_POINTS: usize = 0;
+const EXTRA_MATCH_START_POINTS_MODE: ExtraMatchStartPointMode = ExtraMatchStartPointMode::Reverse;
 
 /// Parameters for development-only label-filtered search using multi-hop expansion.
 #[derive(Debug)]
@@ -159,7 +171,10 @@ where
 
 impl<K> HybridPredicate<K> for NotInMutWithLabelCheckDev<'_, K> where K: VectorId {}
 
-/// Development copy of the internal multihop search implementation.
+/// Internal multihop search implementation.
+///
+/// Performs label-filtered search by expanding through non-matching nodes
+/// to find matching neighbors within two hops.
 pub(crate) async fn multihop_search_internal_dev<I, A, T, SR>(
     max_degree_with_slack: usize,
     search_params: &Knn,
@@ -175,20 +190,23 @@ where
     SR: SearchRecord<I> + ?Sized,
 {
     let beam_width = search_params.beam_width().get();
-    let max_consecutive_hops_without_match = 2usize;
     let mut has_entered_effective_region = false;
-    let mut consecutive_hops_without_match = 0usize;
+    let mut pending_stop = false;
+    let k_value = search_params.k_value().get();
 
+    // Helper to build the final stats from scratch state.
     let make_stats = |scratch: &SearchScratch<I>| InternalSearchStats {
         cmps: scratch.cmps,
         hops: scratch.hops,
         range_search_second_round: false,
     };
 
+    // Initialize search state if not already initialized.
+    // This allows paged search to call multihop_search_internal multiple times
     if scratch.visited.is_empty() {
         let start_ids = accessor.starting_points().await?;
 
-        for id in start_ids {
+        for id in start_ids.iter().copied() {
             scratch.visited.insert(id);
             let element = accessor
                 .get_element(id)
@@ -197,27 +215,93 @@ where
             let dist = computer.evaluate_similarity(element.reborrow());
             scratch.best.insert(Neighbor::new(id, dist));
         }
+        //early stop
+        if EXTRA_MATCH_START_POINTS > 0 {
+            let base_id_end = start_ids
+                .iter()
+                .copied()
+                .min()
+                .unwrap_or_default()
+                .into_usize();
+            let mut added = 0usize;
+            match EXTRA_MATCH_START_POINTS_MODE {
+                ExtraMatchStartPointMode::Forward => {
+                    for raw_id in 0..base_id_end {
+                        if added >= EXTRA_MATCH_START_POINTS {
+                            break;
+                        }
+                        let Ok(id) = raw_id.try_into_vector_id() else {
+                            continue;
+                        };
+                        if scratch.visited.contains(&id) || !query_label_evaluator.is_match(id) {
+                            continue;
+                        }
+
+                        scratch.visited.insert(id);
+                        let element = accessor
+                            .get_element(id)
+                            .await
+                            .escalate("extra matching start point retrieval must succeed")?;
+                        let dist = computer.evaluate_similarity(element.reborrow());
+                        scratch.cmps += 1;
+                        scratch.best.insert(Neighbor::new(id, dist));
+                        added += 1;
+                    }
+                }
+                ExtraMatchStartPointMode::Reverse => {
+                    for raw_id in (0..base_id_end).rev() {
+                        if added >= EXTRA_MATCH_START_POINTS {
+                            break;
+                        }
+                        let Ok(id) = raw_id.try_into_vector_id() else {
+                            continue;
+                        };
+                        if scratch.visited.contains(&id) || !query_label_evaluator.is_match(id) {
+                            continue;
+                        }
+
+                        scratch.visited.insert(id);
+                        let element = accessor
+                            .get_element(id)
+                            .await
+                            .escalate("extra matching start point retrieval must succeed")?;
+                        let dist = computer.evaluate_similarity(element.reborrow());
+                        scratch.cmps += 1;
+                        scratch.best.insert(Neighbor::new(id, dist));
+                        added += 1;
+                    }
+                }
+            }
+        }
     }
 
+    // Pre-allocate with good capacity to avoid repeated allocations
     let mut one_hop_neighbors = Vec::with_capacity(max_degree_with_slack);
     let mut two_hop_neighbors = Vec::with_capacity(max_degree_with_slack);
     let mut candidates_two_hop_expansion = Vec::with_capacity(max_degree_with_slack);
 
     while scratch.best.has_notvisited_node() && !accessor.terminate_early() {
         let mut hop_match_count = 0usize;
+        let mut hop_closest_distance = None;
 
         scratch.beam_nodes.clear();
         one_hop_neighbors.clear();
         candidates_two_hop_expansion.clear();
         two_hop_neighbors.clear();
 
+        // In this loop we are going to find the beam_width number of nodes that are closest to the query.
+        // Each of these nodes will be a frontier node.
         while scratch.beam_nodes.len() < beam_width
             && let Some(closest_node) = scratch.best.closest_notvisited()
         {
+            if hop_closest_distance.is_none() {
+                hop_closest_distance = Some(closest_node.distance);
+            }
             search_record.record(closest_node, scratch.hops, scratch.cmps);
             scratch.beam_nodes.push(closest_node.id);
         }
 
+        // compute distances from query to one-hop neighbors, and mark them visited
         accessor
             .expand_beam(
                 scratch.beam_nodes.iter().copied(),
@@ -227,6 +311,7 @@ where
             )
             .await?;
 
+        // Process one-hop neighbors based on on_visit() decision
         for neighbor in one_hop_neighbors.iter().copied() {
             match query_label_evaluator.on_visit(neighbor) {
                 QueryVisitDecision::Accept(accepted) => {
@@ -234,6 +319,7 @@ where
                     hop_match_count += 1;
                 }
                 QueryVisitDecision::Reject => {
+                    // Rejected nodes: still add to two-hop expansion so we can traverse through them
                     candidates_two_hop_expansion.push(neighbor);
                 }
                 QueryVisitDecision::Terminate => {
@@ -247,53 +333,67 @@ where
         scratch.cmps += one_hop_neighbors.len() as u32;
         scratch.hops += scratch.beam_nodes.len() as u32;
 
-        // if hop_match_count * 4 >= one_hop_neighbors.len() {
-        //     has_entered_effective_region = true;
-        //     consecutive_hops_without_match = 0;
-        //     continue;
-        // }
+        if hop_match_count * 2 >= one_hop_neighbors.len() {
+            has_entered_effective_region = true;
+            continue;
+        }
 
+        // sort the candidates for two-hop expansion by distance to query point
         candidates_two_hop_expansion.sort_unstable_by(|a, b| {
             a.distance
                 .partial_cmp(&b.distance)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
+        // limit the number of two-hop candidates to avoid too many expansions
         candidates_two_hop_expansion.truncate(max_degree_with_slack / 2);
 
-        let two_hop_expansion_candidate_ids: Vec<I> =
-            candidates_two_hop_expansion.iter().map(|n| n.id).collect();
+        let two_hop_match_limit = max_degree_with_slack / 2;
+        // let two_hop_match_limit = 100;
 
-        accessor
-            .expand_beam(
-                two_hop_expansion_candidate_ids.iter().copied(),
-                computer,
-                NotInMutWithLabelCheckDev::new(&mut scratch.visited, query_label_evaluator),
-                |distance, id| {
-                    two_hop_neighbors.push(Neighbor::new(id, distance));
-                },
-            )
-            .await?;
-
-        hop_match_count += two_hop_neighbors.len();
-        two_hop_neighbors
-            .iter()
-            .for_each(|neighbor| scratch.best.insert(*neighbor));
-
-        scratch.cmps += two_hop_neighbors.len() as u32;
-        scratch.hops += two_hop_expansion_candidate_ids.len() as u32;
-
-        if hop_match_count > 0 {
-            has_entered_effective_region = true;
-            consecutive_hops_without_match = 0;
-        } else if has_entered_effective_region {
-            consecutive_hops_without_match += 1;
-            if consecutive_hops_without_match >= max_consecutive_hops_without_match
-                && scratch.best.size() > search_params.k_value().get()
-            {
+        for candidate in candidates_two_hop_expansion.iter().copied() {
+            if hop_match_count > two_hop_match_limit || accessor.terminate_early() {
                 break;
             }
+
+            two_hop_neighbors.clear();
+
+            accessor
+                .expand_beam(
+                    std::iter::once(candidate.id),
+                    computer,
+                    NotInMutWithLabelCheckDev::new(&mut scratch.visited, query_label_evaluator),
+                    |distance, id| {
+                        two_hop_neighbors.push(Neighbor::new(id, distance));
+                    },
+                )
+                .await?;
+
+            hop_match_count += two_hop_neighbors.len();
+            scratch.cmps += two_hop_neighbors.len() as u32;
+            scratch.hops += 1;
+
+            two_hop_neighbors
+                .iter()
+                .for_each(|neighbor| scratch.best.insert(*neighbor));
         }
+
+        // if hop_match_count > 0 {
+        //     has_entered_effective_region = true;
+        //     pending_stop = false; // found new matches, cancel any pending stop
+        // } else if has_entered_effective_region {
+        //     if scratch.best.size() > k_value {
+        //         let kth_distance = scratch.best.get(k_value - 1).distance;
+        //         if let Some(current_hop_distance) = hop_closest_distance
+        //             && current_hop_distance > kth_distance
+        //         {
+        //             if pending_stop {
+        //                 break;
+        //             }
+        //             pending_stop = true;
+        //         }
+        //     }
+        // }
     }
 
     Ok(make_stats(scratch))

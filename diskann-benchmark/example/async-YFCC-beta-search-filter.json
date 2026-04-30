@@ -10,14 +10,15 @@
           "index-source": "Load",
           "data_type": "uint8",
           "distance": "squared_l2",
-          "load_path":  "/scratch1/zhan4404/dataset/YFCC10M/index/YFCC10M_index.bin"
+          "load_path":  "/scratch1/zhan4404/dataset/YFCC10M/index/YFCC10M_index_m64.bin"
         },
         "search_phase": {
           "search-type": "topk-beta-filter",
-            "beta": 0.3,
-            "queries": "multiple_medium_query_10M_10k.u8bin",
-            "groundtruth": "converted_gt/GT_multiple_medium_query_10M_10k.bin",
-            "query_predicates": "converted_query_labels_jsonl/multiple_medium_query_10M_10k.jsonl",
+            "beta": 0.5,
+            "queries": "single_high_query_10M_10k.u8bin",
+            "groundtruth": "converted_gt/GT_single_high_query_10M_10k.bin",
+            "query_predicates": "converted_query_labels_jsonl/single_high_query_10M_10k.jsonl",
+            "bitmap": "/scratch1/zhan4404/dataset/YFCC10M/converted_query_labels_jsonl/single_high_query_10M_10k.jsonl.base.10M.label.jsonl.bitmap_cache.bin",
             "data_labels": "base.10M.label.jsonl",
           "reps": 3,
           "num_threads": [
@@ -25,8 +26,13 @@
           ],
           "runs": [
             {
-              "search_n": 100,
+              "search_n": 10,
               "search_l": [
+                10,
+                20,
+                30,
+                40,
+                70,
                 100,
                 130,
                 160,

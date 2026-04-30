@@ -335,18 +335,27 @@ where
                     search_phase.bitmap.as_deref(),
                 )?;
 
+            let counting_labels: std::sync::Arc<[_]> = bit_maps
+                .into_iter()
+                .map(utils::filters::as_query_label_provider)
+                .map(benchmark_core::search::graph::knn::CountingLabelProvider::new)
+                .map(std::sync::Arc::new)
+                .collect();
+
             let search_strategies = setup_filter_strategies(
                 search_phase.beta,
-                bit_maps
-                    .into_iter()
-                    .map(utils::filters::as_query_label_provider),
+                counting_labels
+                    .iter()
+                    .cloned()
+                    .map(|label| -> std::sync::Arc<dyn diskann::graph::index::QueryLabelProvider<u32>> { label }),
                 search_strategy.clone(),
             );
 
-            let knn = benchmark_core::search::graph::KNN::new(
+            let knn = benchmark_core::search::graph::KNN::new_with_labels(
                 index,
                 queries,
                 benchmark_core::search::graph::Strategy::collection(search_strategies),
+                counting_labels,
             )?;
 
             let steps = search::knn::SearchSteps::new(
@@ -386,14 +395,18 @@ where
                     search_phase.bitmap.as_deref(),
                 )?;
 
+            let counting_labels: std::sync::Arc<[_]> = bit_maps
+                .into_iter()
+                .map(utils::filters::as_query_label_provider)
+                .map(benchmark_core::search::graph::knn::CountingLabelProvider::new)
+                .map(std::sync::Arc::new)
+                .collect();
+
             let multihop = benchmark_core::search::graph::MultiHop::new(
                 index,
                 queries,
                 benchmark_core::search::graph::Strategy::broadcast(search_strategy),
-                bit_maps
-                    .into_iter()
-                    .map(utils::filters::as_query_label_provider)
-                    .collect(),
+                counting_labels,
             )?;
 
             let search_results = search::knn::run(&multihop, &groundtruth, steps)?;
@@ -426,14 +439,18 @@ where
                     search_phase.bitmap.as_deref(),
                 )?;
 
+            let counting_labels: std::sync::Arc<[_]> = bit_maps
+                .into_iter()
+                .map(utils::filters::as_query_label_provider)
+                .map(benchmark_core::search::graph::knn::CountingLabelProvider::new)
+                .map(std::sync::Arc::new)
+                .collect();
+
             let multihop = benchmark_core::search::graph::MultiHopDev::new(
                 index,
                 queries,
                 benchmark_core::search::graph::Strategy::broadcast(search_strategy),
-                bit_maps
-                    .into_iter()
-                    .map(utils::filters::as_query_label_provider)
-                    .collect(),
+                counting_labels,
             )?;
 
             let search_results = search::knn::run(&multihop, &groundtruth, steps)?;

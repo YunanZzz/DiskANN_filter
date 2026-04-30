@@ -175,9 +175,8 @@ where
     SR: SearchRecord<I> + ?Sized,
 {
     let beam_width = search_params.beam_width().get();
-    let max_consecutive_hops_without_match = 2usize;
     let mut has_entered_effective_region = false;
-    let mut consecutive_hops_without_match = 0usize;
+    let k_value = search_params.k_value().get();
 
     let make_stats = |scratch: &SearchScratch<I>| InternalSearchStats {
         cmps: scratch.cmps,
@@ -205,6 +204,7 @@ where
 
     while scratch.best.has_notvisited_node() && !accessor.terminate_early() {
         let mut hop_match_count = 0usize;
+        let mut hop_closest_distance = None;
 
         scratch.beam_nodes.clear();
         one_hop_neighbors.clear();
@@ -214,6 +214,9 @@ where
         while scratch.beam_nodes.len() < beam_width
             && let Some(closest_node) = scratch.best.closest_notvisited()
         {
+            if hop_closest_distance.is_none() {
+                hop_closest_distance = Some(closest_node.distance);
+            }
             search_record.record(closest_node, scratch.hops, scratch.cmps);
             scratch.beam_nodes.push(closest_node.id);
         }
@@ -247,11 +250,10 @@ where
         scratch.cmps += one_hop_neighbors.len() as u32;
         scratch.hops += scratch.beam_nodes.len() as u32;
 
-        // if hop_match_count * 4 >= one_hop_neighbors.len() {
-        //     has_entered_effective_region = true;
-        //     consecutive_hops_without_match = 0;
-        //     continue;
-        // }
+        if hop_match_count * 4 >= one_hop_neighbors.len() {
+            has_entered_effective_region = true;
+            continue;
+        }
 
         candidates_two_hop_expansion.sort_unstable_by(|a, b| {
             a.distance
@@ -285,13 +287,14 @@ where
 
         if hop_match_count > 0 {
             has_entered_effective_region = true;
-            consecutive_hops_without_match = 0;
         } else if has_entered_effective_region {
-            consecutive_hops_without_match += 1;
-            if consecutive_hops_without_match >= max_consecutive_hops_without_match
-                && scratch.best.size() > search_params.k_value().get()
-            {
-                break;
+            if scratch.best.size() > k_value {
+                let kth_distance = scratch.best.get(k_value - 1).distance;
+                if let Some(current_hop_distance) = hop_closest_distance
+                    && current_hop_distance > kth_distance
+                {
+                    break;
+                }
             }
         }
     }

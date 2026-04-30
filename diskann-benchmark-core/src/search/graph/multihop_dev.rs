@@ -24,7 +24,7 @@ where
     index: Arc<graph::DiskANNIndex<DP>>,
     queries: Arc<Matrix<T>>,
     strategy: Strategy<S>,
-    labels: Arc<[Arc<dyn graph::index::QueryLabelProvider<DP::InternalId>>]>,
+    labels: Arc<[Arc<super::knn::CountingLabelProvider<DP::InternalId>>]>,
 }
 
 impl<DP, T, S> MultiHopDev<DP, T, S>
@@ -36,7 +36,7 @@ where
         index: Arc<graph::DiskANNIndex<DP>>,
         queries: Arc<Matrix<T>>,
         strategy: Strategy<S>,
-        labels: Arc<[Arc<dyn graph::index::QueryLabelProvider<DP::InternalId>>]>,
+        labels: Arc<[Arc<super::knn::CountingLabelProvider<DP::InternalId>>]>,
     ) -> anyhow::Result<Arc<Self>> {
         strategy.length_compatible(queries.nrows())?;
 
@@ -85,6 +85,7 @@ where
         O: graph::SearchOutputBuffer<DP::ExternalId> + Send,
     {
         let context = DP::Context::default();
+        let bitmap_checks_before = self.labels[index].check_count();
         let multihop_search =
             graph::search::MultihopSearchDev::new(*parameters, &*self.labels[index]);
         let stats = self
@@ -101,6 +102,7 @@ where
         Ok(super::knn::Metrics {
             comparisons: stats.cmps,
             hops: stats.hops,
+            bitmap_checks: self.labels[index].check_count() - bitmap_checks_before,
         })
     }
 }

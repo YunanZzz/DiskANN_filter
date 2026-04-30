@@ -380,25 +380,31 @@ mod imp {
                                 search_phase.bitmap.as_deref(),
                             )?;
 
-                            let label_providers: Vec<_> = bit_maps
+                            let counting_labels: std::sync::Arc<[_]> = bit_maps
                                 .into_iter()
                                 .map(utils::filters::as_query_label_provider)
+                                .map(benchmark_core::search::graph::knn::CountingLabelProvider::new)
+                                .map(std::sync::Arc::new)
                                 .collect();
 
                             for &layout in self.input.query_layouts.iter() {
                                 let strategy = inmem::spherical::Quantized::search(layout.into());
                                 let search_strategies = setup_filter_strategies(
                                     search_phase.beta,
-                                    label_providers.iter().cloned(),
+                                    counting_labels
+                                        .iter()
+                                        .cloned()
+                                        .map(|label| -> std::sync::Arc<dyn diskann::graph::index::QueryLabelProvider<u32>> { label }),
                                     strategy.clone(),
                                 );
 
-                                let knn = benchmark_core::search::graph::KNN::new(
+                                let knn = benchmark_core::search::graph::KNN::new_with_labels(
                                     index.clone(),
                                     queries.clone(),
                                     benchmark_core::search::graph::Strategy::Collection(
                                         search_strategies.into(),
                                     ),
+                                    counting_labels.clone(),
                                 )?;
 
                                 let search_results = search::knn::run(&knn, &groundtruth, steps)?;
@@ -440,6 +446,8 @@ mod imp {
                             let bit_map_filters: Arc<[_]> = bit_maps
                                 .into_iter()
                                 .map(utils::filters::as_query_label_provider)
+                                .map(benchmark_core::search::graph::knn::CountingLabelProvider::new)
+                                .map(std::sync::Arc::new)
                                 .collect();
 
                             for &layout in self.input.query_layouts.iter() {

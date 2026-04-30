@@ -14,10 +14,11 @@
         },
         "search_phase": {
           "search-type": "topk-beta-filter",
-            "queries": "new_query/caselaw_query_single_vector_embeddings_100_sel_0.005_0.01.bin",
-            "groundtruth": "new_query/caselaw_singlevec_gt_filtered_100_sel_0.005_0.01.bin",
+            "queries": "new_query/caselaw_query_single_vector_embeddings_100_sel_0.1_0.5.bin",
+            "groundtruth": "new_query/caselaw_singlevec_gt_filtered_100_sel_0.1_0.5.bin",
             "beta": 0.5,
-            "query_predicates": "new_query/caselaw_query_single_vector_filters_100_sel_0.005_0.01.jsonl",
+            "bitmap": "new_query/caselaw_query_single_vector_filters_100_sel_0.1_0.5.jsonl.caselaw_base_single_vector_metadata.jsonl.bitmap_cache.bin",
+            "query_predicates": "new_query/caselaw_query_single_vector_filters_100_sel_0.1_0.5.jsonl",
             "data_labels": "caselaw_base_single_vector_metadata.jsonl",
           "reps": 3,
           "num_threads": [

@@ -6,11 +6,13 @@
 //! A built-in helper for benchmarking K-nearest neighbors.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use diskann::{
     ANNResult,
-    graph::{self, glue},
+    graph::{self, glue, index::{QueryLabelProvider, QueryVisitDecision}},
     provider,
+    utils::VectorId,
 };
 use diskann_benchmark_runner::utils::{MicroSeconds, percentiles};
 use diskann_utils::{future::AsyncFriendly, views::Matrix};
@@ -39,6 +41,7 @@ where
     index: Arc<graph::DiskANNIndex<DP>>,
     queries: Arc<Matrix<T>>,
     strategy: Strategy<S>,
+    bitmap_labels: Option<Arc<[Arc<CountingLabelProvider<DP::InternalId>>]>>,
 }
 
 impl<DP, T, S> KNN<DP, T, S>
@@ -67,7 +70,67 @@ where
             index,
             queries,
             strategy,
+            bitmap_labels: None,
         }))
+    }
+
+    /// Construct a new [`KNN`] searcher that also tracks bitmap checks through `bitmap_labels`.
+    pub fn new_with_labels(
+        index: Arc<graph::DiskANNIndex<DP>>,
+        queries: Arc<Matrix<T>>,
+        strategy: Strategy<S>,
+        bitmap_labels: Arc<[Arc<CountingLabelProvider<DP::InternalId>>]>,
+    ) -> anyhow::Result<Arc<Self>> {
+        strategy.length_compatible(queries.nrows())?;
+
+        if bitmap_labels.len() != queries.nrows() {
+            anyhow::bail!(
+                "Number of bitmap label providers ({}) must be equal to the number of queries ({})",
+                bitmap_labels.len(),
+                queries.nrows()
+            );
+        }
+
+        Ok(Arc::new(Self {
+            index,
+            queries,
+            strategy,
+            bitmap_labels: Some(bitmap_labels),
+        }))
+    }
+}
+
+#[derive(Debug)]
+pub struct CountingLabelProvider<I> {
+    inner: Arc<dyn QueryLabelProvider<I>>,
+    checks: AtomicU32,
+}
+
+impl<I> CountingLabelProvider<I> {
+    pub fn new(inner: Arc<dyn QueryLabelProvider<I>>) -> Self {
+        Self {
+            inner,
+            checks: AtomicU32::new(0),
+        }
+    }
+
+    pub fn check_count(&self) -> u32 {
+        self.checks.load(Ordering::Relaxed)
+    }
+}
+
+impl<I> QueryLabelProvider<I> for CountingLabelProvider<I>
+where
+    I: VectorId,
+{
+    fn is_match(&self, vec_id: I) -> bool {
+        self.checks.fetch_add(1, Ordering::Relaxed);
+        self.inner.is_match(vec_id)
+    }
+
+    fn on_visit(&self, neighbor: diskann::neighbor::Neighbor<I>) -> QueryVisitDecision<I> {
+        self.checks.fetch_add(1, Ordering::Relaxed);
+        self.inner.on_visit(neighbor)
     }
 }
 
@@ -83,6 +146,8 @@ pub struct Metrics {
     pub comparisons: u32,
     /// The number of candidates expanded during search.
     pub hops: u32,
+    /// The number of bitmap or label-match checks performed during search.
+    pub bitmap_checks: u32,
 }
 
 impl<DP, T, S> Search for KNN<DP, T, S>
@@ -114,6 +179,11 @@ where
     {
         let context = DP::Context::default();
         let knn_search = *parameters;
+        let bitmap_checks_before = self
+            .bitmap_labels
+            .as_ref()
+            .map(|labels| labels[index].check_count())
+            .unwrap_or(0);
         let stats = self
             .index
             .search(
@@ -128,6 +198,11 @@ where
         Ok(Metrics {
             comparisons: stats.cmps,
             hops: stats.hops,
+            bitmap_checks: self
+                .bitmap_labels
+                .as_ref()
+                .map(|labels| labels[index].check_count() - bitmap_checks_before)
+                .unwrap_or(0),
         })
     }
 }
@@ -174,6 +249,9 @@ pub struct Summary {
 
     /// The average number of neighbor hops per query.
     pub mean_hops: f64,
+
+    /// The average number of bitmap or label-match checks per query.
+    pub mean_bitmap_checks: f64,
 }
 
 /// A [`search::Aggregate`] for collecting the results of multiple [`KNN`] search runs.
@@ -270,6 +348,11 @@ where
                 results
                     .iter()
                     .flat_map(|r| r.output().iter().map(|o| o.hops)),
+            ),
+            mean_bitmap_checks: utils::average_all(
+                results
+                    .iter()
+                    .flat_map(|r| r.output().iter().map(|o| o.bitmap_checks)),
             ),
         })
     }
