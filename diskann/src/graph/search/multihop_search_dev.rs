@@ -33,9 +33,6 @@ use crate::{
     utils::{TryIntoVectorId, VectorId},
 };
 
-// Development-only knobs for seeding extra matching start points into the initial queue.
-// Set `EXTRA_MATCH_START_POINTS` to zero to disable the extra scan entirely.
-const EXTRA_MATCH_START_POINTS: usize = 1;
 
 /// Parameters for development-only label-filtered search using multi-hop expansion.
 #[derive(Debug)]
@@ -209,41 +206,9 @@ where
                 .escalate("start point retrieval must succeed")?;
             let dist = computer.evaluate_similarity(element.reborrow());
             scratch.best.insert(Neighbor::new(id, dist));
+            scratch.cmps += 1;
         }
-        //early stop
-        if EXTRA_MATCH_START_POINTS > 0 {
-            let start_max_id = start_ids
-                .iter()
-                .copied()
-                .max()
-                .unwrap_or_default()
-                .into_usize();
-            let mut added = 0usize;
 
-            // Always scan in reverse order from the max starting point id.
-            for raw_id in (0..=start_max_id).rev() {
-                if added >= EXTRA_MATCH_START_POINTS {
-                    break;
-                }
-
-                let Ok(id) = raw_id.try_into_vector_id() else {
-                    continue;
-                };
-                if scratch.visited.contains(&id) || !query_label_evaluator.is_match(id) {
-                    continue;
-                }
-
-                let element = accessor
-                    .get_element(id)
-                    .await
-                    .escalate("extra matching start point retrieval must succeed")?;
-                let dist = computer.evaluate_similarity(element.reborrow());
-                scratch.cmps += 1;
-                scratch.visited.insert(id);
-                scratch.best.insert(Neighbor::new(id, dist));
-                added += 1;
-            }
-        }
     }
 
     // Pre-allocate with good capacity to avoid repeated allocations
@@ -323,8 +288,6 @@ where
         });
 
         // limit the number of two-hop candidates to avoid too many expansions
-        // candidates_two_hop_expansion.truncate(max_degree_with_slack / 2);
-
         let two_hop_match_limit =
             ((max_degree_with_slack as f64 * skip_twohops_threshold) as usize)
                 .max(max_degree_with_slack / 8);
@@ -377,23 +340,6 @@ where
                 .iter()
                 .for_each(|neighbor| scratch.best.insert(*neighbor));
         }
-
-        // if hop_match_count > 0 {
-        //     has_entered_effective_region = true;
-        //     pending_stop = false; // found new matches, cancel any pending stop
-        // } else if has_entered_effective_region {
-        //     if scratch.best.size() > k_value {
-        //         let kth_distance = scratch.best.get(k_value - 1).distance;
-        //         if let Some(current_hop_distance) = hop_closest_distance
-        //             && current_hop_distance > kth_distance
-        //         {
-        //             if pending_stop {
-        //                 break;
-        //             }
-        //             pending_stop = true;
-        //         }
-        //     }
-        // }
     }
 
     Ok(make_stats(scratch))
