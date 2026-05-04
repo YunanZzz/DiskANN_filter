@@ -33,17 +33,10 @@ use crate::{
     utils::{TryIntoVectorId, VectorId},
 };
 
-#[allow(dead_code)]
-#[derive(Debug, Clone, Copy)]
-enum ExtraMatchStartPointMode {
-    Forward,
-    Reverse,
-}
 
 // Development-only knobs for seeding extra matching start points into the initial queue.
 // Set `EXTRA_MATCH_START_POINTS` to zero to disable the extra scan entirely.
 const EXTRA_MATCH_START_POINTS: usize = 1;
-const EXTRA_MATCH_START_POINTS_MODE: ExtraMatchStartPointMode = ExtraMatchStartPointMode::Reverse;
 
 /// Parameters for development-only label-filtered search using multi-hop expansion.
 #[derive(Debug)]
@@ -217,55 +210,36 @@ where
         }
         //early stop
         if EXTRA_MATCH_START_POINTS > 0 {
-            let base_id_end = start_ids.iter().copied().min().unwrap_or_default().into_usize();
+            let start_max_id = start_ids
+                .iter()
+                .copied()
+                .max()
+                .unwrap_or_default()
+                .into_usize();
             let mut added = 0usize;
-            match EXTRA_MATCH_START_POINTS_MODE {
-                ExtraMatchStartPointMode::Forward => {
-                    for raw_id in 0..base_id_end {
-                        if added >= EXTRA_MATCH_START_POINTS {
-                            break;
-                        }
-                        let Ok(id) = raw_id.try_into_vector_id() else {
-                            continue;
-                        };
-                        if scratch.visited.contains(&id) || !query_label_evaluator.is_match(id) {
-                            continue;
-                        }
 
-                        scratch.visited.insert(id);
-                        let element = accessor
-                            .get_element(id)
-                            .await
-                            .escalate("extra matching start point retrieval must succeed")?;
-                        let dist = computer.evaluate_similarity(element.reborrow());
-                        scratch.cmps += 1;
-                        scratch.best.insert(Neighbor::new(id, dist));
-                        added += 1;
-                    }
+            // Always scan in reverse order from the max starting point id.
+            for raw_id in (0..=start_max_id).rev() {
+                if added >= EXTRA_MATCH_START_POINTS {
+                    break;
                 }
-                ExtraMatchStartPointMode::Reverse => {
-                    for raw_id in (0..base_id_end).rev() {
-                        if added >= EXTRA_MATCH_START_POINTS {
-                            break;
-                        }
-                        let Ok(id) = raw_id.try_into_vector_id() else {
-                            continue;
-                        };
-                        if scratch.visited.contains(&id) || !query_label_evaluator.is_match(id) {
-                            continue;
-                        }
 
-                        scratch.visited.insert(id);
-                        let element = accessor
-                            .get_element(id)
-                            .await
-                            .escalate("extra matching start point retrieval must succeed")?;
-                        let dist = computer.evaluate_similarity(element.reborrow());
-                        scratch.cmps += 1;
-                        scratch.best.insert(Neighbor::new(id, dist));
-                        added += 1;
-                    }
+                let Ok(id) = raw_id.try_into_vector_id() else {
+                    continue;
+                };
+                if scratch.visited.contains(&id) || !query_label_evaluator.is_match(id) {
+                    continue;
                 }
+
+                let element = accessor
+                    .get_element(id)
+                    .await
+                    .escalate("extra matching start point retrieval must succeed")?;
+                let dist = computer.evaluate_similarity(element.reborrow());
+                scratch.cmps += 1;
+                scratch.visited.insert(id);
+                scratch.best.insert(Neighbor::new(id, dist));
+                added += 1;
             }
         }
     }

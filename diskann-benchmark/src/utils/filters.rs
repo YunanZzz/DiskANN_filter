@@ -17,6 +17,7 @@ use diskann::{graph::index::QueryLabelProvider, utils::VectorId};
 use diskann_benchmark_runner::files::InputFile;
 use diskann_label_filter::{
     kv_index::GenericIndex,
+    read_baselabels,
     stores::bftree_store::BfTreeStore,
     traits::{
         posting_list_trait::{PostingList, RoaringPostingList},
@@ -77,14 +78,44 @@ where
 }
 
 #[derive(Debug)]
-pub struct BitmapFilter(pub BitSet);
+pub struct BitmapFilter {
+    bitset: BitSet,
+    global_selectivity: Option<f64>,
+}
+
+impl BitmapFilter {
+    pub fn new(bitset: BitSet, total_points: usize) -> Self {
+        let global_selectivity = if total_points == 0 {
+            None
+        } else {
+            Some(bitset.len() as f64 / total_points as f64)
+        };
+
+        Self {
+            bitset,
+            global_selectivity,
+        }
+    }
+
+    #[cfg(test)]
+    fn without_total_points(bitset: BitSet) -> Self {
+        Self {
+            bitset,
+            global_selectivity: None,
+        }
+    }
+}
 
 impl<T> QueryLabelProvider<T> for BitmapFilter
 where
     T: VectorId,
 {
     fn is_match(&self, vec_id: T) -> bool {
-        self.0.contains(vec_id.into_usize())
+        self.bitset.contains(vec_id.into_usize())
+    }
+
+    fn global_selectivity(&self) -> Option<f64> {
+        self.global_selectivity
     }
 }
 
@@ -103,11 +134,18 @@ impl From<SerializableBitSet> for BitSet {
     }
 }
 
+pub(crate) struct GeneratedBitmaps {
+    pub bit_maps: Vec<BitSet>,
+    pub total_points: usize,
+}
+
 pub(crate) fn generate_bitmaps(
     query_predicates: &InputFile,
     data_labels: &InputFile,
     bitmap_path: Option<&str>,
-) -> anyhow::Result<Vec<BitSet>> {
+) -> anyhow::Result<GeneratedBitmaps> {
+    let total_points = read_baselabels(data_labels.to_str().unwrap())?.len();
+
     if let Some(bitmap_path) = bitmap_path {
         let bitmap_path = Path::new(bitmap_path);
         println!(
@@ -122,7 +160,10 @@ pub(crate) fn generate_bitmaps(
             let serialized: Vec<SerializableBitSet> = bincode::deserialize_from(reader)?;
             let loaded: Vec<BitSet> = serialized.into_iter().map(Into::into).collect();
             println!("Loaded bitmap cache from {}", bitmap_path.display());
-            return Ok(loaded);
+            return Ok(GeneratedBitmaps {
+                bit_maps: loaded,
+                total_points,
+            });
         }
     }
 
@@ -146,7 +187,10 @@ pub(crate) fn generate_bitmaps(
         println!("Generated bitmaps from query/base labels without writing a cache file");
     }
 
-    Ok(bit_maps)
+    Ok(GeneratedBitmaps {
+        bit_maps,
+        total_points,
+    })
 }
 
 pub(crate) fn setup_filter_strategies<I, S>(
@@ -164,8 +208,11 @@ where
         .collect::<Vec<_>>()
 }
 
-pub(crate) fn as_query_label_provider(set: BitSet) -> Arc<dyn QueryLabelProvider<u32>> {
-    Arc::new(BitmapFilter(set))
+pub(crate) fn as_query_label_provider(
+    set: BitSet,
+    total_points: usize,
+) -> Arc<dyn QueryLabelProvider<u32>> {
+    Arc::new(BitmapFilter::new(set, total_points))
 }
 
 #[cfg(test)]
@@ -177,7 +224,7 @@ mod tests {
         let mut bitset = BitSet::new();
         bitset.insert(1);
         bitset.insert(3);
-        let filter = BitmapFilter(bitset);
+        let filter = BitmapFilter::without_total_points(bitset);
 
         assert!(filter.is_match(1u32));
         assert!(filter.is_match(3u32));
@@ -188,7 +235,7 @@ mod tests {
     #[test]
     fn test_bitmap_filter_empty() {
         let bitset = BitSet::new();
-        let filter = BitmapFilter(bitset);
+        let filter = BitmapFilter::without_total_points(bitset);
 
         assert!(!filter.is_match(0u32));
         assert!(!filter.is_match(10u32));
@@ -198,9 +245,19 @@ mod tests {
     fn test_bitmap_filter_large_id() {
         let mut bitset = BitSet::new();
         bitset.insert(1000);
-        let filter = BitmapFilter(bitset);
+        let filter = BitmapFilter::without_total_points(bitset);
 
         assert!(filter.is_match(1000u32));
         assert!(!filter.is_match(999u32));
+    }
+
+    #[test]
+    fn test_bitmap_filter_global_selectivity() {
+        let mut bitset = BitSet::new();
+        bitset.insert(1);
+        bitset.insert(3);
+        let filter = BitmapFilter::new(bitset, 10);
+
+        assert_eq!(filter.global_selectivity(), Some(0.2));
     }
 }

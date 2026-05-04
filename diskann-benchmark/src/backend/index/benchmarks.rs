@@ -328,26 +328,28 @@ where
             let groundtruth =
                 datafiles::load_range_groundtruth(datafiles::BinFile(&search_phase.groundtruth))?;
 
-            let bit_maps =
-                generate_bitmaps(
-                    &search_phase.query_predicates,
-                    &search_phase.data_labels,
-                    search_phase.bitmap.as_deref(),
-                )?;
+            let bit_maps = generate_bitmaps(
+                &search_phase.query_predicates,
+                &search_phase.data_labels,
+                search_phase.bitmap.as_deref(),
+            )?;
+            let total_points = bit_maps.total_points;
 
             let counting_labels: std::sync::Arc<[_]> = bit_maps
+                .bit_maps
                 .into_iter()
-                .map(utils::filters::as_query_label_provider)
+                .map(|set| utils::filters::as_query_label_provider(set, total_points))
                 .map(benchmark_core::search::graph::knn::CountingLabelProvider::new)
                 .map(std::sync::Arc::new)
                 .collect();
 
             let search_strategies = setup_filter_strategies(
                 search_phase.beta,
-                counting_labels
-                    .iter()
-                    .cloned()
-                    .map(|label| -> std::sync::Arc<dyn diskann::graph::index::QueryLabelProvider<u32>> { label }),
+                counting_labels.iter().cloned().map(
+                    |label| -> std::sync::Arc<dyn diskann::graph::index::QueryLabelProvider<u32>> {
+                        label
+                    },
+                ),
                 search_strategy.clone(),
             );
 
@@ -388,16 +390,17 @@ where
                 &search_phase.runs,
             );
 
-            let bit_maps =
-                generate_bitmaps(
-                    &search_phase.query_predicates,
-                    &search_phase.data_labels,
-                    search_phase.bitmap.as_deref(),
-                )?;
+            let bit_maps = generate_bitmaps(
+                &search_phase.query_predicates,
+                &search_phase.data_labels,
+                search_phase.bitmap.as_deref(),
+            )?;
+            let total_points = bit_maps.total_points;
 
             let counting_labels: std::sync::Arc<[_]> = bit_maps
+                .bit_maps
                 .into_iter()
-                .map(utils::filters::as_query_label_provider)
+                .map(|set| utils::filters::as_query_label_provider(set, total_points))
                 .map(benchmark_core::search::graph::knn::CountingLabelProvider::new)
                 .map(std::sync::Arc::new)
                 .collect();
@@ -432,16 +435,17 @@ where
                 &search_phase.runs,
             );
 
-            let bit_maps =
-                generate_bitmaps(
-                    &search_phase.query_predicates,
-                    &search_phase.data_labels,
-                    search_phase.bitmap.as_deref(),
-                )?;
+            let bit_maps = generate_bitmaps(
+                &search_phase.query_predicates,
+                &search_phase.data_labels,
+                search_phase.bitmap.as_deref(),
+            )?;
+            let total_points = bit_maps.total_points;
 
             let counting_labels: std::sync::Arc<[_]> = bit_maps
+                .bit_maps
                 .into_iter()
-                .map(utils::filters::as_query_label_provider)
+                .map(|set| utils::filters::as_query_label_provider(set, total_points))
                 .map(benchmark_core::search::graph::knn::CountingLabelProvider::new)
                 .map(std::sync::Arc::new)
                 .collect();

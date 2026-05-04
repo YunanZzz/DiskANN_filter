@@ -10,7 +10,10 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use diskann::{
     ANNResult,
-    graph::{self, glue, index::{QueryLabelProvider, QueryVisitDecision}},
+    graph::{
+        self, glue,
+        index::{QueryLabelProvider, QueryVisitDecision},
+    },
     provider,
     utils::VectorId,
 };
@@ -126,6 +129,10 @@ where
     fn is_match(&self, vec_id: I) -> bool {
         self.checks.fetch_add(1, Ordering::Relaxed);
         self.inner.is_match(vec_id)
+    }
+
+    fn global_selectivity(&self) -> Option<f64> {
+        self.inner.global_selectivity()
     }
 
     fn on_visit(&self, neighbor: diskann::neighbor::Neighbor<I>) -> QueryVisitDecision<I> {

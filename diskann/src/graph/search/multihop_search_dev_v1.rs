@@ -37,11 +37,6 @@ use crate::{
 // Set `EXTRA_MATCH_START_POINTS` to zero to disable the extra scan entirely.
 const EXTRA_MATCH_START_POINTS: usize = 1;
 
-// Sliding window early stop parameters: stop if EARLY_STOP_NO_MATCH_THRESHOLD out of
-// the last EARLY_STOP_WINDOW hops had no matches (only active after entering effective region).
-const EARLY_STOP_WINDOW: usize = 3;
-const EARLY_STOP_NO_MATCH_THRESHOLD: usize = 2;
-
 /// Parameters for development-only label-filtered search using multi-hop expansion.
 #[derive(Debug)]
 pub struct MultihopSearchDev<'q, InternalId> {
@@ -187,9 +182,9 @@ where
     SR: SearchRecord<I> + ?Sized,
 {
     let beam_width = search_params.beam_width().get();
-    let k_value = search_params.k_value().get();
     let mut has_entered_effective_region = false;
-    let mut recent_hop_had_match: Vec<bool> = Vec::with_capacity(EARLY_STOP_WINDOW + 1);
+    let mut pending_stop = false;
+    let k_value = search_params.k_value().get();
 
     // Helper to build the final stats from scratch state.
     let make_stats = |scratch: &SearchScratch<I>| InternalSearchStats {
@@ -306,12 +301,11 @@ where
         scratch.cmps += one_hop_neighbors.len() as u32;
         scratch.hops += scratch.beam_nodes.len() as u32;
 
+        let global_selectivity = query_label_evaluator.global_selectivity().unwrap_or(0.1); // default to very low selectivity if not provided
+        let skip_twohops_threshold = global_selectivity.sqrt(); // heuristic threshold for skipping two-hop expansion
+
         if hop_match_count * 2 >= one_hop_neighbors.len() {
             has_entered_effective_region = true;
-            recent_hop_had_match.push(true);
-            if recent_hop_had_match.len() > EARLY_STOP_WINDOW {
-                recent_hop_had_match.remove(0);
-            }
             continue;
         }
 
@@ -323,13 +317,23 @@ where
         });
 
         // limit the number of two-hop candidates to avoid too many expansions
-        candidates_two_hop_expansion.truncate(max_degree_with_slack / 2);
+        // candidates_two_hop_expansion.truncate(max_degree_with_slack / 2);
 
-        let two_hop_match_limit = max_degree_with_slack / 2;
-        // let two_hop_match_limit = 100;
-
+        let two_hop_match_limit =
+            ((max_degree_with_slack as f64 * skip_twohops_threshold) as usize)
+                .max(max_degree_with_slack / 8);
+        let two_hop_distance_stop_after = max_degree_with_slack / 4;
+        let mut two_hop_expansion_count = 0usize;
         for candidate in candidates_two_hop_expansion.iter().copied() {
-            if hop_match_count > two_hop_match_limit || accessor.terminate_early() {
+            // if hop_match_count >= two_hop_match_limit || accessor.terminate_early() {
+            //     break;
+            // }
+            if accessor.terminate_early()
+                || hop_match_count >= two_hop_match_limit
+                || (two_hop_expansion_count >= two_hop_distance_stop_after
+                    && scratch.best.size() >= k_value
+                    && candidate.distance > scratch.best.get(scratch.best.size() - 1).distance)
+            {
                 break;
             }
 
@@ -346,6 +350,7 @@ where
                 )
                 .await?;
 
+            two_hop_expansion_count += 1;
             hop_match_count += two_hop_neighbors.len();
             scratch.cmps += two_hop_neighbors.len() as u32;
             scratch.hops += 1;
@@ -357,23 +362,17 @@ where
 
         if hop_match_count > 0 {
             has_entered_effective_region = true;
-        }
-
-        if has_entered_effective_region {
-            // Only feed the sliding window when the current hop is already beyond the kth result.
-            let beyond_kth = scratch.best.size() > k_value
-                && hop_closest_distance
-                    .is_some_and(|d| d > scratch.best.get(k_value - 1).distance);
-            if beyond_kth {
-                recent_hop_had_match.push(hop_match_count > 0);
-                if recent_hop_had_match.len() > EARLY_STOP_WINDOW {
-                    recent_hop_had_match.remove(0);
-                }
-                let no_match_count = recent_hop_had_match.iter().filter(|&&m| !m).count();
-                if recent_hop_had_match.len() >= EARLY_STOP_WINDOW
-                    && no_match_count >= EARLY_STOP_NO_MATCH_THRESHOLD
+            pending_stop = false; // found new matches, cancel any pending stop
+        } else if has_entered_effective_region {
+            if scratch.best.size() > k_value {
+                let kth_distance = scratch.best.get(k_value - 1).distance;
+                if let Some(current_hop_distance) = hop_closest_distance
+                    && current_hop_distance > kth_distance
                 {
-                    break;
+                    if pending_stop {
+                        break;
+                    }
+                    pending_stop = true;
                 }
             }
         }

@@ -379,10 +379,14 @@ mod imp {
                                 &search_phase.data_labels,
                                 search_phase.bitmap.as_deref(),
                             )?;
+                            let total_points = bit_maps.total_points;
 
                             let counting_labels: std::sync::Arc<[_]> = bit_maps
+                                .bit_maps
                                 .into_iter()
-                                .map(utils::filters::as_query_label_provider)
+                                .map(|set| {
+                                    utils::filters::as_query_label_provider(set, total_points)
+                                })
                                 .map(benchmark_core::search::graph::knn::CountingLabelProvider::new)
                                 .map(std::sync::Arc::new)
                                 .collect();
@@ -391,10 +395,11 @@ mod imp {
                                 let strategy = inmem::spherical::Quantized::search(layout.into());
                                 let search_strategies = setup_filter_strategies(
                                     search_phase.beta,
-                                    counting_labels
-                                        .iter()
-                                        .cloned()
-                                        .map(|label| -> std::sync::Arc<dyn diskann::graph::index::QueryLabelProvider<u32>> { label }),
+                                    counting_labels.iter().cloned().map(
+                                        |label| -> std::sync::Arc<
+                                            dyn diskann::graph::index::QueryLabelProvider<u32>,
+                                        > { label },
+                                    ),
                                     strategy.clone(),
                                 );
 
@@ -442,10 +447,14 @@ mod imp {
                                 &search_phase.data_labels,
                                 search_phase.bitmap.as_deref(),
                             )?;
+                            let total_points = bit_maps.total_points;
 
                             let bit_map_filters: Arc<[_]> = bit_maps
+                                .bit_maps
                                 .into_iter()
-                                .map(utils::filters::as_query_label_provider)
+                                .map(|set| {
+                                    utils::filters::as_query_label_provider(set, total_points)
+                                })
                                 .map(benchmark_core::search::graph::knn::CountingLabelProvider::new)
                                 .map(std::sync::Arc::new)
                                 .collect();
@@ -494,10 +503,16 @@ mod imp {
                                 &search_phase.data_labels,
                                 search_phase.bitmap.as_deref(),
                             )?;
+                            let total_points = bit_maps.total_points;
 
                             let bit_map_filters: Arc<[_]> = bit_maps
+                                .bit_maps
                                 .into_iter()
-                                .map(utils::filters::as_query_label_provider)
+                                .map(|set| {
+                                    utils::filters::as_query_label_provider(set, total_points)
+                                })
+                                .map(benchmark_core::search::graph::knn::CountingLabelProvider::new)
+                                .map(std::sync::Arc::new)
                                 .collect();
 
                             for &layout in self.input.query_layouts.iter() {

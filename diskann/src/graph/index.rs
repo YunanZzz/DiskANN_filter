@@ -82,6 +82,11 @@ pub trait QueryLabelProvider<V: VectorId>: std::fmt::Debug + Send + Sync {
     /// Check if the vec_id's label match the query label
     fn is_match(&self, vec_id: V) -> bool;
 
+    /// Return this query's global selectivity when the provider has that metadata.
+    fn global_selectivity(&self) -> Option<f64> {
+        None
+    }
+
     /// Inspect a candidate before it is inserted into the frontier.
     /// Implementations can tweak the distance, reject the candidate, or
     /// request early termination. The default implementation accepts if
