@@ -18,20 +18,23 @@ use crate::{
     ANNResult,
     error::{ErrorExt, IntoANNResult},
     graph::{
+        AdjacencyList,
         glue::{
-            self, ExpandBeam, HybridPredicate, Predicate, PredicateMut, SearchExt,
-            SearchPostProcess, SearchStrategy,
+            ExpandBeam, HybridPredicate, Predicate, PredicateMut, SearchExt, SearchPostProcess,
+            SearchStrategy,
         },
         index::{
-            DiskANNIndex, InternalSearchStats, QueryLabelProvider, QueryVisitDecision, SearchStats,
+            DiskANNIndex, InternalSearchStats, QueryLabelProvider, SearchStats,
         },
         search::record::NoopSearchRecord,
         search_output_buffer::SearchOutputBuffer,
     },
     neighbor::Neighbor,
-    provider::{BuildQueryComputer, DataProvider},
+    provider::{BuildQueryComputer, DataProvider, NeighborAccessor},
     utils::{TryIntoVectorId, VectorId},
 };
+
+const DEBUG_MULTIHOP_DEV_HOP_STATS: bool = false;
 
 
 /// Parameters for development-only label-filtered search using multi-hop expansion.
@@ -52,6 +55,9 @@ impl<'q, InternalId> MultihopSearchDev<'q, InternalId> {
         }
     }
 }
+
+// const EXTRA_MATCH_START_POINTS: usize = 5;
+
 
 impl<'q, DP, S, T> Search<DP, S, T> for MultihopSearchDev<'q, DP::InternalId>
 where
@@ -185,6 +191,13 @@ where
 
     // Cache global selectivity to avoid repeated Option unwrapping
     let global_selectivity = query_label_evaluator.global_selectivity().unwrap_or(0.1);
+    let skip_twohops_threshold = global_selectivity.sqrt();
+    // let two_hop_match_limit =
+    //     (max_degree_with_slack as f64 * skip_twohops_threshold) as usize;
+    let default_two_hop_match_limit =
+        ((max_degree_with_slack as f64 * skip_twohops_threshold) as usize)
+            .max(max_degree_with_slack / 8);
+    let two_hop_distance_stop_after = max_degree_with_slack / 4;
 
     // Helper to build the final stats from scratch state.
     let make_stats = |scratch: &SearchScratch<I>| InternalSearchStats {
@@ -208,17 +221,51 @@ where
             scratch.best.insert(Neighbor::new(id, dist));
             scratch.cmps += 1;
         }
+        // if EXTRA_MATCH_START_POINTS > 0 {
+        //     let start_max_id = start_ids
+        //         .iter()
+        //         .copied()
+        //         .max()
+        //         .unwrap_or_default()
+        //         .into_usize();
+        //     let mut added = 0usize;
 
+        //     // Always scan in reverse order from the max starting point id.
+        //     for raw_id in (0..=start_max_id).rev() {
+        //         if added >= EXTRA_MATCH_START_POINTS {
+        //             break;
+        //         }
+
+        //         let Ok(id) = raw_id.try_into_vector_id() else {
+        //             continue;
+        //         };
+        //         if scratch.visited.contains(&id) || !query_label_evaluator.is_match(id) {
+        //             continue;
+        //         }
+
+        //         let element = accessor
+        //             .get_element(id)
+        //             .await
+        //             .escalate("extra matching start point retrieval must succeed")?;
+        //         let dist = computer.evaluate_similarity(element.reborrow());
+        //         scratch.cmps += 1;
+        //         scratch.visited.insert(id);
+        //         scratch.best.insert(Neighbor::new(id, dist));
+        //         added += 1;
+        //     }
+        // }
     }
 
     // Pre-allocate with good capacity to avoid repeated allocations
-    let mut one_hop_neighbors = Vec::with_capacity(max_degree_with_slack);
+    let mut one_hop_neighbors = AdjacencyList::with_capacity(max_degree_with_slack);
     let mut two_hop_neighbors = Vec::with_capacity(max_degree_with_slack);
     let mut candidates_two_hop_expansion = Vec::with_capacity(max_degree_with_slack);
+    let mut candidates_two_hop_expansion_with_distance = Vec::new();
+    let mut hop_index = 0usize;
 
     while scratch.best.has_notvisited_node() && !accessor.terminate_early() {
+        hop_index += 1;
         let mut hop_match_count = 0usize;
-        let mut hop_closest_distance = None;
 
         scratch.beam_nodes.clear();
         one_hop_neighbors.clear();
@@ -230,9 +277,6 @@ where
         let mut beam_count = 0;
         while beam_count < beam_width {
             if let Some(closest_node) = scratch.best.closest_notvisited() {
-                if hop_closest_distance.is_none() {
-                    hop_closest_distance = Some(closest_node.distance);
-                }
                 search_record.record(closest_node, scratch.hops, scratch.cmps);
                 scratch.beam_nodes.push(closest_node.id);
                 beam_count += 1;
@@ -241,104 +285,159 @@ where
             }
         }
 
-        // compute distances from query to one-hop neighbors, and mark them visited
-        accessor
-            .expand_beam(
-                scratch.beam_nodes.iter().copied(),
-                computer,
-                glue::NotInMut::new(&mut scratch.visited),
-                |distance, id| one_hop_neighbors.push(Neighbor::new(id, distance)),
-            )
-            .await?;
+        let mut one_hop_neighbor_count = 0usize;
+        for beam_node in scratch.beam_nodes.iter().copied() {
+            accessor
+                .delegate_neighbor()
+                .get_neighbors(beam_node, &mut one_hop_neighbors)
+                .await?;
 
-        // Process one-hop neighbors based on on_visit() decision
-        for neighbor in one_hop_neighbors.iter().copied() {
-            match query_label_evaluator.on_visit(neighbor) {
-                QueryVisitDecision::Accept(accepted) => {
-                    scratch.best.insert(accepted);
-                    hop_match_count += 1;
+            for id in one_hop_neighbors.iter().copied() {
+                if !scratch.visited.insert(id) {
+                    continue;
                 }
-                QueryVisitDecision::Reject => {
-                    // Rejected nodes: still add to two-hop expansion so we can traverse through them
-                    candidates_two_hop_expansion.push(neighbor);
+                one_hop_neighbor_count += 1;
+
+                if !query_label_evaluator.is_match(id) {
+                    candidates_two_hop_expansion.push(id);
+                    continue;
                 }
-                QueryVisitDecision::Terminate => {
-                    scratch.cmps += one_hop_neighbors.len() as u32;
-                    scratch.hops += scratch.beam_nodes.len() as u32;
-                    return Ok(make_stats(scratch));
-                }
+
+                let element = accessor
+                    .get_element(id)
+                    .await
+                    .escalate("one-hop matching neighbor retrieval must succeed")?;
+                let distance = computer.evaluate_similarity(element.reborrow());
+                scratch.cmps += 1;
+                scratch.best.insert(Neighbor::new(id, distance));
+                hop_match_count += 1;
             }
         }
 
-        scratch.cmps += one_hop_neighbors.len() as u32;
         scratch.hops += scratch.beam_nodes.len() as u32;
 
-        let skip_twohops_threshold = global_selectivity.sqrt(); // heuristic threshold for skipping two-hop expansion
+        if DEBUG_MULTIHOP_DEV_HOP_STATS {
+            println!(
+                "multihop_dev hop={} hop_match_count={} one_hop_neighbor_count={} candidates_two_hop_expansion={} global_selectivity={} skip_twohops_threshold={} max_degree_with_slack={}",
+                hop_index,
+                hop_match_count,
+                one_hop_neighbor_count,
+                candidates_two_hop_expansion.len(),
+                global_selectivity,
+                skip_twohops_threshold,
+                max_degree_with_slack,
+            );
+        }
 
-        if hop_match_count * 2 >= one_hop_neighbors.len() {
+        if hop_match_count * 2 >= one_hop_neighbor_count {
             // has_entered_effective_region = true;
             continue;
         }
 
-        // sort the candidates for two-hop expansion by distance to query point
-        candidates_two_hop_expansion.sort_unstable_by(|a, b| {
-            a.distance
-                .partial_cmp(&b.distance)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        let local_ratio = hop_match_count as f64 / one_hop_neighbor_count as f64;
+        let two_hop_match_limit = default_two_hop_match_limit.max((max_degree_with_slack as f64 * local_ratio) as usize);
+        let sorted_two_hop_expansion =
+             local_ratio <= skip_twohops_threshold;
 
-        // limit the number of two-hop candidates to avoid too many expansions
-        let two_hop_match_limit =
-            ((max_degree_with_slack as f64 * skip_twohops_threshold) as usize)
-                .max(max_degree_with_slack / 8);
-        let two_hop_distance_stop_after = max_degree_with_slack / 4;
-        let mut two_hop_expansion_count = 0usize;
+        // let sorted_two_hop_expansion = false;
+        if sorted_two_hop_expansion {
+            candidates_two_hop_expansion_with_distance.clear();
+            for id in candidates_two_hop_expansion.iter().copied() {
+                let element = accessor
+                    .get_element(id)
+                    .await
+                    .escalate("one-hop non-matching candidate retrieval must succeed")?;
+                let distance = computer.evaluate_similarity(element.reborrow());
+                scratch.cmps += 1;
+                candidates_two_hop_expansion_with_distance.push(Neighbor::new(id, distance));
+            }
 
-        // Cache values that don't change during the loop
-        let should_check_distance_threshold = scratch.best.size() >= k_value;
-        let current_worst_distance = if should_check_distance_threshold {
-            scratch.best.get(scratch.best.size() - 1).distance
+            candidates_two_hop_expansion_with_distance.sort_unstable_by(|a, b| {
+                a.distance.total_cmp(&b.distance)
+            });
+        }
+
+        if sorted_two_hop_expansion {
+            let mut two_hop_expansion_count = 0usize;
+
+            let should_check_distance_threshold = scratch.best.size() >= k_value;
+            let current_worst_distance = if should_check_distance_threshold {
+                scratch.best.get(scratch.best.size() - 1).distance
+            } else {
+                f32::INFINITY
+            };
+            for candidate in candidates_two_hop_expansion_with_distance.iter().copied() {
+                if hop_match_count >= two_hop_match_limit {
+                    break;
+                }
+
+                if should_check_distance_threshold
+                    && two_hop_expansion_count >= two_hop_distance_stop_after
+                    && candidate.distance > current_worst_distance
+                {
+                    break;
+                }
+
+                if accessor.terminate_early() {
+                    break;
+                }
+
+                two_hop_neighbors.clear();
+
+                accessor
+                    .expand_beam(
+                        std::iter::once(candidate.id),
+                        computer,
+                        NotInMutWithLabelCheckDev::new(
+                            &mut scratch.visited,
+                            query_label_evaluator,
+                        ),
+                        |distance, id| {
+                            two_hop_neighbors.push(Neighbor::new(id, distance));
+                        },
+                    )
+                    .await?;
+
+                two_hop_expansion_count += 1;
+                hop_match_count += two_hop_neighbors.len();
+                scratch.cmps += two_hop_neighbors.len() as u32;
+                scratch.hops += 1;
+
+                two_hop_neighbors
+                    .iter()
+                    .for_each(|neighbor| scratch.best.insert(*neighbor));
+            }
         } else {
-            f32::INFINITY
-        };
+            for candidate in candidates_two_hop_expansion.iter().copied() {
+                if hop_match_count >= two_hop_match_limit {
+                    break;
+                }
 
-        for candidate in candidates_two_hop_expansion.iter().copied() {
-            // Early termination checks (minimize per-iteration overhead)
-            if hop_match_count >= two_hop_match_limit {
-                break;
+                if accessor.terminate_early() {
+                    break;
+                }
+
+                two_hop_neighbors.clear();
+
+                accessor
+                    .expand_beam(
+                        std::iter::once(candidate),
+                        computer,
+                        NotInMutWithLabelCheckDev::new(&mut scratch.visited, query_label_evaluator),
+                        |distance, id| {
+                            two_hop_neighbors.push(Neighbor::new(id, distance));
+                        },
+                    )
+                    .await?;
+
+                hop_match_count += two_hop_neighbors.len();
+                scratch.cmps += two_hop_neighbors.len() as u32;
+                scratch.hops += 1;
+
+                two_hop_neighbors
+                    .iter()
+                    .for_each(|neighbor| scratch.best.insert(*neighbor));
             }
-
-            if should_check_distance_threshold
-                && two_hop_expansion_count >= two_hop_distance_stop_after
-                && candidate.distance > current_worst_distance {
-                break;
-            }
-
-            if accessor.terminate_early() {
-                break;
-            }
-
-            two_hop_neighbors.clear();
-
-            accessor
-                .expand_beam(
-                    std::iter::once(candidate.id),
-                    computer,
-                    NotInMutWithLabelCheckDev::new(&mut scratch.visited, query_label_evaluator),
-                    |distance, id| {
-                        two_hop_neighbors.push(Neighbor::new(id, distance));
-                    },
-                )
-                .await?;
-
-            two_hop_expansion_count += 1;
-            hop_match_count += two_hop_neighbors.len();
-            scratch.cmps += two_hop_neighbors.len() as u32;
-            scratch.hops += 1;
-
-            two_hop_neighbors
-                .iter()
-                .for_each(|neighbor| scratch.best.insert(*neighbor));
         }
     }
 
