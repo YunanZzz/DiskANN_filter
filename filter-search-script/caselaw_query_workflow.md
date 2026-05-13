@@ -133,7 +133,7 @@ caselaw_query_single_vector_filters_100.jsonl
 caselaw_singlevec_gt_filtered_100.bin
         |
         v
-check_selectivity_en.ipynb
+check_selectivity.ipynb
         |
         v
 query_selectivity_summary.csv
@@ -142,5 +142,5 @@ query_selectivity_summary.csv
 regenerate_query_by_selectivity.py
         |
         v
-selectivity-bucketed query sets
+query sets with different selectivities
 ```
