@@ -14,10 +14,10 @@
         },
         "search_phase": {
           "search-type": "topk-multihop-filter-dev",
-            "queries": "multiple_medium_query_10M_10k.u8bin",
-            "groundtruth": "converted_gt/GT_multiple_medium_query_10M_10k.bin",
-            "query_predicates": "converted_query_labels_jsonl/multiple_medium_query_10M_10k.jsonl",
-            "bitmap": "/scratch1/zhan4404/dataset/YFCC10M/converted_query_labels_jsonl/multiple_medium_query_10M_10k.jsonl.base.10M.label.jsonl.bitmap_cache.bin",
+            "queries": "single_high_query_10M_10k.u8bin",
+            "groundtruth": "converted_gt/GT_single_high_query_10M_10k.bin",
+            "query_predicates": "converted_query_labels_jsonl/single_high_query_10M_10k.jsonl",
+            "bitmap": "/scratch1/zhan4404/dataset/YFCC10M/converted_query_labels_jsonl/single_high_query_10M_10k.jsonl.base.10M.label.jsonl.bitmap_cache.bin",
             "data_labels": "base.10M.label.jsonl",
           "reps": 3,
           "num_threads": [

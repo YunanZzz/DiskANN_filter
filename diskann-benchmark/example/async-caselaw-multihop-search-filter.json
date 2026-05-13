@@ -13,12 +13,12 @@
           "load_path":  "/scratch1/zhan4404/dataset/caselaw/caselaw_index_diskann_m64.bin"
         },
         "search_phase": {
-          "search-type": "topk-multihop-filter",
-            "queries": "new_query/caselaw_query_single_vector_embeddings_100_sel_0.01_0.1.bin",
-            "groundtruth": "new_query/caselaw_singlevec_gt_filtered_100_sel_0.01_0.1.bin",
-            "query_predicates": "new_query/caselaw_query_single_vector_filters_100_sel_0.01_0.1.jsonl",
+          "search-type": "topk-multihop-filter-dev",
+            "queries": "new_query/caselaw_query_single_vector_embeddings_100_sel_0.005_0.01.bin",
+            "groundtruth": "new_query/caselaw_singlevec_gt_filtered_100_sel_0.005_0.01.bin",
+            "query_predicates": "new_query/caselaw_query_single_vector_filters_100_sel_0.005_0.01.jsonl",
             "data_labels": "caselaw_base_single_vector_metadata.jsonl",
-            "bitmap": "new_query/caselaw_query_single_vector_filters_100_sel_0.01_0.1.jsonl.caselaw_base_single_vector_metadata.jsonl.bitmap_cache.bin",
+            "bitmap": "new_query/caselaw_query_single_vector_filters_100_sel_0.005_0.01.jsonl.caselaw_base_single_vector_metadata.jsonl.bitmap_cache.bin",
           "reps": 3,
           "num_threads": [
             16
@@ -31,10 +31,10 @@
                 20,
                 30,
                 40,
-                50,
                 70,
                 100,
-                150,
+                130,
+                160,
                 200
               ],
               "recall_k": 10
